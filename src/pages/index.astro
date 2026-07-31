@@ -1,0 +1,31 @@
+---
+import Game from '../components/Game.astro';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Portfolio</title>
+  </head>
+  <body>
+    <Game />
+    <style is:global>
+      :root {
+        color-scheme: light;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #ffffff;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        overflow: hidden;
+      }
+    </style>
+  </body>
+</html>

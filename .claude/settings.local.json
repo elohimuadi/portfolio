@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npx astro *)",
+      "Bash(mkdir -p /Users/joshman/Desktop/愛してる/projects/portfolio/public/assets)",
+      "Bash(cp /Users/joshman/Desktop/愛してる/pxart/s-Sheet.png /Users/joshman/Desktop/愛してる/projects/portfolio/public/assets/character.png)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(npm run *)",
+      "Bash(echo \"PID=$!\")",
+      "Read(//tmp/**)",
+      "Bash(kill 90334)",
+      "Bash(ps -p 90334 -o pid=)",
+      "mcp__plugin_everything-claude-code_playwright__browser_navigate",
+      "Bash(curl -s -o /dev/null -w \"index: %{http_code}\\\\n\" http://localhost:4321/)",
+      "Bash(curl -s -o /dev/null -w \"sprite: %{http_code} \\(%{size_download} bytes\\)\\\\n\" http://localhost:4321/assets/character.png)",
+      "Bash(sips -g pixelWidth -g pixelHeight /Users/joshman/Desktop/愛してる/projects/portfolio/public/assets/character.png)",
+      "Bash(sips -g pixelWidth -g pixelHeight /Users/joshman/Desktop/愛してる/pxart/s-Sheet.png)",
+      "Bash(sips -g pixelWidth -g pixelHeight /Users/joshman/Desktop/愛してる/pxart/ssheet.png)",
+      "Bash(grep -viE \"\\\\.aseprite$|\\\\.pal$\")",
+      "Bash(python3 *)",
+      "Bash(/usr/bin/curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:4321/assets/map.tmj)",
+      "Bash(sips *)",
+      "Read(//Users/joshman/Desktop/愛してる/**)",
+      "Read(//Users/joshman/Desktop/**)"
+    ]
+  }
+}

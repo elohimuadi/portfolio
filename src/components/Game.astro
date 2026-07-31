@@ -1,0 +1,347 @@
+---
+// Phaser is initialized client-side from the script block below.
+// The Astro server pass renders the canvas mount + the dialogue shell.
+---
+
+<div id="game-root" class="game-root" aria-label="Portfolio interactive map"></div>
+
+<div id="portfolio-dialogue" class="dialogue-layer" hidden>
+  <div
+    class="dialogue"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="dialogue-title"
+    aria-describedby="dialogue-body-text"
+    data-dialogue
+  >
+    <div class="dialogue-title-box" id="dialogue-title" data-dialogue-title>—</div>
+    <div class="dialogue-body-box">
+      <p class="dialogue-text" id="dialogue-body-text" data-dialogue-text></p>
+      <span class="dialogue-advance" aria-hidden="true" data-dialogue-advance>▼</span>
+    </div>
+  </div>
+</div>
+
+<style>
+  .game-root {
+    width: 100vw;
+    height: 100vh;
+    background: #f6f4ee;
+    image-rendering: pixelated;
+    overflow: hidden;
+  }
+
+  .game-root :global(canvas) {
+    image-rendering: pixelated;
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  /* Full-viewport overlay that captures clicks for "advance dialogue" but
+     leaves the world visible behind it (no backdrop dim). */
+  .dialogue-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0 16px 20px;
+    cursor: pointer;
+  }
+
+  .dialogue-layer[hidden] {
+    display: none;
+  }
+
+  .dialogue {
+    width: min(640px, 100%);
+    color: #f6f4ee;
+    /* Plain 'monospace' — the exact font-family string BootScene/IntroScene
+       use for their Phaser text (fontFamily: 'monospace'), so the DOM
+       dialogue and the Phaser boot/intro screens read as the same font. */
+    font-family: monospace;
+    animation: dialogue-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  .dialogue-title-box {
+    display: inline-block;
+    background: #0d0d0d;
+    border: 3px solid #f6f4ee;
+    padding: 6px 16px 5px;
+    margin-left: 18px;
+    margin-bottom: -3px; /* overlap with body box border */
+    font-size: 12px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    position: relative;
+    z-index: 1;
+    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
+  }
+
+  .dialogue-body-box {
+    position: relative;
+    background: #0d0d0d;
+    border: 3px solid #f6f4ee;
+    padding: 18px 22px 26px;
+    min-height: 96px;
+    box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.45);
+  }
+
+  .dialogue-text {
+    margin: 0;
+    /* No font-family override — inherits monospace from .dialogue. */
+    font-size: 16px;
+    line-height: 1.55;
+    letter-spacing: 0.01em;
+    color: #f6f4ee;
+    min-height: 3em;
+    white-space: pre-wrap;
+  }
+
+  .dialogue-advance {
+    position: absolute;
+    right: 16px;
+    bottom: 10px;
+    font-size: 12px;
+    color: #f6f4ee;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .dialogue[data-state='ready'] .dialogue-advance {
+    opacity: 1;
+    animation: advance-bob 900ms steps(2) infinite;
+  }
+
+  @keyframes dialogue-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes advance-bob {
+    from {
+      transform: translateY(0);
+    }
+    to {
+      transform: translateY(3px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dialogue {
+      animation: none;
+    }
+    .dialogue[data-state='ready'] .dialogue-advance {
+      animation: none;
+    }
+  }
+</style>
+
+<script>
+  import { startGame } from '../game/main';
+  import {
+    EVT_CHOICE_CONFIRMED,
+    EVT_HIDE_CHOICES,
+    EVT_INTERACT,
+    EVT_MODAL_CLOSED,
+    EVT_SHOW_CHOICES,
+    interactionState,
+    type ChoiceConfirmedDetail,
+    type InteractDetail,
+  } from '../game/state';
+  import { INTERACTABLE_CONTENT, type DialogueChoice } from '../game/content/interactables';
+
+  const TYPE_SPEED_MS = 35;
+
+  startGame('game-root');
+
+  const layer = document.getElementById('portfolio-dialogue');
+  if (!layer) throw new Error('Dialogue mount missing.');
+
+  const dialogueEl = layer.querySelector<HTMLElement>('[data-dialogue]');
+  const titleEl = layer.querySelector<HTMLElement>('[data-dialogue-title]');
+  const textEl = layer.querySelector<HTMLElement>('[data-dialogue-text]');
+  if (!dialogueEl || !titleEl || !textEl) {
+    throw new Error('Dialogue template missing required slots.');
+  }
+
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  let fullText = '';
+  let typedIndex = 0;
+  let typingTimer: number | null = null;
+  let isTyping = false;
+  // Choices to show once the current line finishes typing, and the ones
+  // currently active (i.e. already handed off to WorldScene's Phaser choice
+  // UI via EVT_SHOW_CHOICES). Cleared after the player picks one, so a
+  // chosen follow-up line (e.g. "Alright, next time then.") always ends in
+  // the plain 'ready' state instead of re-prompting.
+  let pendingChoices: DialogueChoice[] | null = null;
+  let activeChoices: DialogueChoice[] | null = null;
+
+  function clearTimer(): void {
+    if (typingTimer !== null) {
+      window.clearInterval(typingTimer);
+      typingTimer = null;
+    }
+  }
+
+  function setState(state: 'typing' | 'ready' | 'closed'): void {
+    if (state === 'closed') {
+      dialogueEl.removeAttribute('data-state');
+    } else {
+      dialogueEl.setAttribute('data-state', state);
+    }
+  }
+
+  function showChoices(choices: DialogueChoice[]): void {
+    activeChoices = choices;
+    interactionState.choicesOpen = true;
+    window.dispatchEvent(
+      new CustomEvent(EVT_SHOW_CHOICES, { detail: { labels: choices.map((c) => c.label) } })
+    );
+  }
+
+  function hideChoices(): void {
+    if (!interactionState.choicesOpen) return;
+    activeChoices = null;
+    interactionState.choicesOpen = false;
+    window.dispatchEvent(new CustomEvent(EVT_HIDE_CHOICES));
+  }
+
+  function selectChoice(index: number): void {
+    const choice = activeChoices?.[index];
+    if (!choice) return;
+
+    hideChoices();
+
+    if (choice.href) {
+      window.open(choice.href, '_blank', 'noopener,noreferrer');
+      closeDialogue();
+      return;
+    }
+
+    if (choice.followUpBody) {
+      pendingChoices = null;
+      fullText = choice.followUpBody;
+      startTyping();
+      return;
+    }
+
+    closeDialogue();
+  }
+
+  function finishTyping(): void {
+    clearTimer();
+    textEl.textContent = fullText;
+    isTyping = false;
+    if (pendingChoices && pendingChoices.length > 0) {
+      showChoices(pendingChoices);
+    } else {
+      setState('ready');
+    }
+  }
+
+  function startTyping(): void {
+    clearTimer();
+    typedIndex = 0;
+    textEl.textContent = '';
+    isTyping = true;
+    setState('typing');
+
+    if (prefersReducedMotion) {
+      finishTyping();
+      return;
+    }
+
+    typingTimer = window.setInterval(() => {
+      typedIndex += 1;
+      textEl.textContent = fullText.slice(0, typedIndex);
+      if (typedIndex >= fullText.length) {
+        finishTyping();
+      }
+    }, TYPE_SPEED_MS);
+  }
+
+  function openDialogue(id: string): void {
+    const content = INTERACTABLE_CONTENT[id];
+    if (!content) return;
+
+    pendingChoices = content.choices ?? null;
+    hideChoices();
+    fullText = content.body;
+    titleEl.textContent = content.title;
+
+    layer.hidden = false;
+    interactionState.modalOpen = true;
+
+    startTyping();
+  }
+
+  function closeDialogue(): void {
+    if (!interactionState.modalOpen) return;
+    clearTimer();
+    isTyping = false;
+    pendingChoices = null;
+    hideChoices();
+    setState('closed');
+    layer.hidden = true;
+    interactionState.modalOpen = false;
+    window.dispatchEvent(new CustomEvent(EVT_MODAL_CLOSED));
+  }
+
+  function advanceOrSkip(): void {
+    if (isTyping) {
+      finishTyping();
+      return;
+    }
+    if (interactionState.choicesOpen) return;
+    closeDialogue();
+  }
+
+  window.addEventListener(EVT_INTERACT, (event) => {
+    const detail = (event as CustomEvent<InteractDetail>).detail;
+    if (!detail?.id) return;
+    openDialogue(detail.id);
+  });
+
+  // WorldScene (Phaser) owns all choice rendering/navigation now — this just
+  // reacts once the player confirms one (E/Space).
+  window.addEventListener(EVT_CHOICE_CONFIRMED, (event) => {
+    const detail = (event as CustomEvent<ChoiceConfirmedDetail>).detail;
+    if (!detail) return;
+    selectChoice(detail.index);
+  });
+
+  layer.addEventListener('click', () => {
+    if (!interactionState.modalOpen) return;
+    advanceOrSkip();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (!interactionState.modalOpen) return;
+    if (event.repeat) return;
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeDialogue();
+      return;
+    }
+
+    // WorldScene handles W/S/arrows/E/Space entirely while choices are shown.
+    if (interactionState.choicesOpen) return;
+
+    if (event.key === 'e' || event.key === 'E' || event.key === ' ' || event.key === 'Enter') {
+      event.preventDefault();
+      advanceOrSkip();
+    }
+  });
+</script>
