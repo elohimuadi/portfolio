@@ -66,6 +66,11 @@ export const INTERACTABLE_CONTENT: Record<string, InteractableContent> = {
       { label: 'No', followUpBody: 'Alright, next time then.' },
     ],
   },
+  claude: {
+    title: 'CLAUDE',
+    kind: 'npc',
+    body: `I wrote most of this code. You're welcome.`,
+  },
   cross: {
     title: 'CROSS',
     kind: 'item',
