@@ -12,6 +12,7 @@ import {
   type ShowChoicesDetail,
 } from '../state';
 import {
+  CLAUDE_IDLE_KEY,
   CROSS_ANIM_KEY,
   GOJOCAT_IDLE_KEY,
   MAP_SHEET_KEY,
@@ -116,6 +117,19 @@ const SHOYA_ID = 'shoya';
 const SHOYA_BODY_WIDTH = 20;
 const SHOYA_BODY_HEIGHT = 14;
 const SHOYA_FRAME = 4;
+
+// Claude sits in the west diamond plaza (verified against map.tmj: ground id
+// 29, unblocked, well clear of the corridor at rows 29-30 and the
+// project_hakari fallback interactable point near (9,30)).
+const CLAUDE_TILE_X = 9;
+const CLAUDE_TILE_Y = 26;
+const CLAUDE_ID = 'claude';
+// Trimmed to Claude's small blob silhouette (full sprite bbox is only 16×12px,
+// vs. Shoya's near-full-frame 22×32px) — base-only, same "no collision on the
+// head" convention as the other NPCs.
+const CLAUDE_BODY_WIDTH = 14;
+const CLAUDE_BODY_HEIGHT = 8;
+const CLAUDE_FRAME = 7;
 
 // All NPCs use a collision box covering only their base/body — the
 // transparent top and visible head have no collision, so the player's body
@@ -445,6 +459,7 @@ export class WorldScene extends Phaser.Scene {
   private gojocat?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private pompompurin?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private shoya?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
+  private claude?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private props: Phaser.GameObjects.Sprite[] = [];
   private introComplete = false;
 
@@ -524,6 +539,15 @@ export class WorldScene extends Phaser.Scene {
       id: SHOYA_ID,
       centerX: this.shoya.x,
       centerY: this.shoya.y - TILE_SIZE / 2,
+      radius: NPC_INTERACT_RADIUS,
+    });
+
+    this.claude = this.spawnClaude();
+    this.physics.add.collider(this.player, this.claude);
+    this.interactables.push({
+      id: CLAUDE_ID,
+      centerX: this.claude.x,
+      centerY: this.claude.y - TILE_SIZE / 2,
       radius: NPC_INTERACT_RADIUS,
     });
 
@@ -624,6 +648,7 @@ export class WorldScene extends Phaser.Scene {
       this.gojocat,
       this.pompompurin,
       this.shoya,
+      this.claude,
       ...this.props,
       this.controlsHint,
     ].filter((t): t is NonNullable<typeof t> => t !== undefined);
@@ -739,6 +764,7 @@ export class WorldScene extends Phaser.Scene {
     this.gojocat?.setDepth(this.gojocat.y);
     this.pompompurin?.setDepth(this.pompompurin.y);
     this.shoya?.setDepth(this.shoya.y);
+    this.claude?.setDepth(this.claude.y);
     for (const prop of this.props) prop.setDepth(prop.y);
   }
 
@@ -919,6 +945,20 @@ export class WorldScene extends Phaser.Scene {
     );
   }
 
+  private spawnClaude(): Phaser.Types.Physics.Arcade.SpriteWithStaticBody {
+    // Scaled to match the player's own sprite scale (both are 32×32 source
+    // frames, so the same factor makes them read as the same size on screen).
+    return this.spawnNpc(
+      CLAUDE_TILE_X,
+      CLAUDE_TILE_Y,
+      CLAUDE_FRAME,
+      CLAUDE_BODY_WIDTH,
+      CLAUDE_BODY_HEIGHT,
+      CLAUDE_IDLE_KEY,
+      PLAYER_SPRITE_SCALE
+    );
+  }
+
   private spawnProp(tileX: number, tileY: number, def: PropDef): Phaser.GameObjects.Sprite {
     const scale = def.scale ?? 1;
     const feetX = tileX * TILE_SIZE + TILE_SIZE / 2 + (def.offsetX ?? 0);
@@ -972,6 +1012,7 @@ export class WorldScene extends Phaser.Scene {
       { col: GOJOCAT_TILE_X, row: GOJOCAT_TILE_Y },
       { col: POMPOMPURIN_TILE_X, row: POMPOMPURIN_TILE_Y },
       { col: SHOYA_TILE_X, row: SHOYA_TILE_Y },
+      { col: CLAUDE_TILE_X, row: CLAUDE_TILE_Y },
       { col: CROSS_TILE_X, row: CROSS_TILE_Y },
       { col: BOBA_TILE_X, row: BOBA_TILE_Y },
     ];
@@ -1059,6 +1100,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.gojocat) worldObjects.push(this.gojocat);
     if (this.pompompurin) worldObjects.push(this.pompompurin);
     if (this.shoya) worldObjects.push(this.shoya);
+    if (this.claude) worldObjects.push(this.claude);
     worldObjects.push(...this.props);
     if (this.marker) worldObjects.push(this.marker);
     this.uiCamera.ignore(worldObjects);

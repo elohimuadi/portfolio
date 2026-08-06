@@ -3,15 +3,17 @@ import Phaser from 'phaser';
 const MAP_KEY = 'map';
 const PLAYER_SHEET_KEY = 'player';
 // Shared NPC spritesheet: frames 0-1 are gojocat's idle loop, frames 2-3 are
-// pompompurin's idle loop, frames 4-6 are Shoya's idle loop (row-major frame
-// order over a 3×3 grid of 32×32 cells; frames 7-8 are unused padding).
+// pompompurin's idle loop, frames 4-6 are Shoya's idle loop, frames 7-8 are
+// Claude's blink loop (row-major frame order over a 3×3 grid of 32×32 cells).
 export const NPC_SHEET_KEY = 'npc-sheet';
 export const GOJOCAT_IDLE_KEY = 'idle-gojocat';
 export const POMPOMPURIN_IDLE_KEY = 'idle-pompompurin';
 export const SHOYA_IDLE_KEY = 'idle-shoya';
+export const CLAUDE_IDLE_KEY = 'idle-claude';
 const GOJOCAT_IDLE_FRAMES = [0, 1];
 const POMPOMPURIN_IDLE_FRAMES = [2, 3];
 const SHOYA_IDLE_FRAMES = [4, 5, 6];
+const CLAUDE_IDLE_FRAMES = [7, 8];
 const NPC_IDLE_FRAME_MS = 400;
 export const MAP_SHEET_KEY = 'map-sheet';
 
@@ -202,6 +204,20 @@ export class BootScene extends Phaser.Scene {
         key: SHOYA_IDLE_KEY,
         frames: this.anims.generateFrameNumbers(NPC_SHEET_KEY, {
           frames: SHOYA_IDLE_FRAMES,
+        }),
+        frameRate: 1000 / NPC_IDLE_FRAME_MS,
+        yoyo: true,
+        repeat: -1,
+      });
+    }
+
+    if (!this.anims.exists(CLAUDE_IDLE_KEY)) {
+      // yoyo: true plays 7→8→7→... (eyes open→closed→open) so the blink
+      // ping-pongs naturally instead of holding on frame 8 and snapping back.
+      this.anims.create({
+        key: CLAUDE_IDLE_KEY,
+        frames: this.anims.generateFrameNumbers(NPC_SHEET_KEY, {
+          frames: CLAUDE_IDLE_FRAMES,
         }),
         frameRate: 1000 / NPC_IDLE_FRAME_MS,
         yoyo: true,
