@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { DIALOGUE_SFX_KEY } from './BootScene';
 
 const INTRO_LINES = [
   'There lives a boy named Josh that loves lavenders,',
@@ -12,12 +13,16 @@ const BODY_FONT_SIZE = 12;
 const PROMPT_FONT_SIZE = 10;
 const SIDE_PADDING = 24;
 const PROMPT_MARGIN = 12;
+const DIALOGUE_SFX_VOLUME = 0.35;
+const DIALOGUE_SFX_MIN_RATE = 0.9;
+const DIALOGUE_SFX_MAX_RATE = 1.1;
 
 export class IntroScene extends Phaser.Scene {
   private bodyText?: Phaser.GameObjects.Text;
   private promptText?: Phaser.GameObjects.Text;
   private promptTween?: Phaser.Tweens.Tween;
   private typeEvent?: Phaser.Time.TimerEvent;
+  private typeSfx?: Phaser.Sound.BaseSound;
   private fullText = '';
   private charIndex = 0;
   private typingDone = false;
@@ -46,6 +51,8 @@ export class IntroScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    this.typeSfx = this.sound.add(DIALOGUE_SFX_KEY, { volume: DIALOGUE_SFX_VOLUME });
+
     this.promptText = this.add
       .text(0, 0, '[ click to continue ]', {
         fontFamily: 'monospace',
@@ -72,6 +79,7 @@ export class IntroScene extends Phaser.Scene {
       this.scale.off('resize', this.handleResize, this);
       this.typeEvent?.remove(false);
       this.promptTween?.stop();
+      this.typeSfx?.destroy();
     });
   }
 
@@ -79,9 +87,20 @@ export class IntroScene extends Phaser.Scene {
     if (!this.bodyText) return;
     this.charIndex += 1;
     this.bodyText.setText(this.fullText.slice(0, this.charIndex));
+    this.playTypeSfx();
     if (this.charIndex >= this.fullText.length) {
       this.finishTyping();
     }
+  }
+
+  // Stopping before re-playing (rather than letting each call overlap the
+  // last) is what gives the clipped, staccato "RPG chatter" sound instead of
+  // a blurred wall of overlapping tones.
+  private playTypeSfx(): void {
+    if (!this.typeSfx) return;
+    this.typeSfx.stop();
+    const rate = Phaser.Math.FloatBetween(DIALOGUE_SFX_MIN_RATE, DIALOGUE_SFX_MAX_RATE);
+    this.typeSfx.play({ rate });
   }
 
   private finishTyping(): void {

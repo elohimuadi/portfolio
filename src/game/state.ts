@@ -23,8 +23,14 @@ export const EVT_NEAREST_CHANGED = 'portfolio:nearest-changed';
 export const EVT_SHOW_CHOICES = 'portfolio:show-choices';
 export const EVT_HIDE_CHOICES = 'portfolio:hide-choices';
 export const EVT_CHOICE_CONFIRMED = 'portfolio:choice-confirmed';
+// Dispatched by Game.astro (which owns choice content/selection) when a
+// chosen DialogueChoice carries a `reaction` — lets WorldScene (which owns
+// the actual sprite) react to a choice pick without either side needing to
+// know about the other's internals.
+export const EVT_NPC_REACT = 'portfolio:npc-react';
 
 export type InteractDetail = { id: string };
 export type NearestChangedDetail = { id: string | null };
 export type ShowChoicesDetail = { labels: string[] };
 export type ChoiceConfirmedDetail = { index: number };
+export type NpcReactDetail = { id: string; reaction: string };

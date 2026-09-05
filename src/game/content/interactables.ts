@@ -2,9 +2,16 @@ export type DialogueChoice = {
   label: string;
   // Selecting this choice opens href in a new tab, then closes the dialogue.
   href?: string;
-  // Selecting this choice instead re-types this text as a follow-up line
-  // (single-level branch — the follow-up itself has no further choices).
+  // Selecting this choice instead re-types this text as a follow-up line.
   followUpBody?: string;
+  // Choices to present once followUpBody finishes typing — recursive, so a
+  // branch can nest to any depth (each nested choice can itself carry its
+  // own followUpBody/followUpChoices).
+  followUpChoices?: DialogueChoice[];
+  // Selecting this choice fires EVT_NPC_REACT (id + this value) so WorldScene
+  // can react on the Phaser side — e.g. swap an NPC's sprite frame. Purely
+  // content-side metadata; this module has no Phaser dependency.
+  reaction?: string;
 };
 
 export type InteractableContent = {
@@ -70,6 +77,48 @@ export const INTERACTABLE_CONTENT: Record<string, InteractableContent> = {
     title: 'CLAUDE',
     kind: 'npc',
     body: `I wrote most of this code. You're welcome.`,
+  },
+  golang: {
+    title: 'GOLANG',
+    kind: 'npc',
+    body: `You wanna know a lil sumthin?`,
+    choices: [
+      {
+        label: 'Yes',
+        followUpBody: `I know you better than you know yourself. What sumthin do you wanna know?`,
+        followUpChoices: [
+          {
+            label: 'Spotz',
+            followUpBody: `Spotz huh. On my notes on everything about you it reads that it is a local spot finder so you dont ever look like a tourist and do tourist things. Apparently it scours websites and posts only native to the country you are discovering. Kinda mid I could make that in erm 3 seconds. Anyways wanna visit it?`,
+            followUpChoices: [
+              { label: 'Yes', href: 'https://github.com/elohimuadi/spotz' },
+              {
+                label: 'No',
+                followUpBody: `and all that pitching I did get out of my face`,
+                reaction: 'annoyed',
+              },
+            ],
+          },
+          {
+            label: 'Hakari',
+            followUpBody: `well I cant tell you about dat just yet son.`,
+          },
+          {
+            label: 'Sidequest',
+            followUpBody: `well I cant tell you about dat just yet son.`,
+          },
+        ],
+      },
+      {
+        label: 'No',
+        followUpBody: `well whyd you come up to me boy`,
+        reaction: 'annoyed',
+      },
+      {
+        label: 'how do you know me so well?',
+        followUpBody: `well..... um...... I have my ways (definitely dont stalk you or anything)`,
+      },
+    ],
   },
   cross: {
     title: 'CROSS',

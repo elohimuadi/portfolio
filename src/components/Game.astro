@@ -56,7 +56,7 @@
   }
 
   .dialogue {
-    width: min(640px, 100%);
+    width: min(880px, 100%);
     color: #f6f4ee;
     /* Plain 'monospace' — the exact font-family string BootScene/IntroScene
        use for their Phaser text (fontFamily: 'monospace'), so the DOM
@@ -84,8 +84,8 @@
     position: relative;
     background: #0d0d0d;
     border: 3px solid #f6f4ee;
-    padding: 18px 22px 26px;
-    min-height: 96px;
+    padding: 26px 32px 34px;
+    min-height: 136px;
     box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.45);
   }
 
@@ -96,7 +96,7 @@
     line-height: 1.55;
     letter-spacing: 0.01em;
     color: #f6f4ee;
-    min-height: 3em;
+    min-height: 4.5em;
     white-space: pre-wrap;
   }
 
@@ -152,16 +152,44 @@
     EVT_HIDE_CHOICES,
     EVT_INTERACT,
     EVT_MODAL_CLOSED,
+    EVT_NPC_REACT,
     EVT_SHOW_CHOICES,
     interactionState,
     type ChoiceConfirmedDetail,
     type InteractDetail,
+    type NpcReactDetail,
   } from '../game/state';
   import { INTERACTABLE_CONTENT, type DialogueChoice } from '../game/content/interactables';
+  import { DIALOGUE_SFX_KEY } from '../game/scenes/BootScene';
 
   const TYPE_SPEED_MS = 35;
+  const DIALOGUE_SFX_VOLUME = 0.35;
+  const DIALOGUE_SFX_MIN_RATE = 0.9;
+  const DIALOGUE_SFX_MAX_RATE = 1.1;
 
-  startGame('game-root');
+  const game = startGame('game-root');
+  // Phaser's SoundManager lives on the Game instance itself (the same object
+  // every Scene's `this.sound` points to), so this DOM-side typewriter can
+  // share BootScene's preloaded clip without needing its own Scene. Built
+  // lazily (not here at module scope) because BootScene's preload — which
+  // decodes dialogue.wav into the audio cache — hasn't run yet at this point;
+  // Phaser.Sound's `add()` throws synchronously if the key isn't cached yet,
+  // and an uncaught throw here would abort the rest of this module, silently
+  // skipping every listener registered below it (including EVT_INTERACT).
+  let typeSfx: Phaser.Sound.BaseSound | null = null;
+
+  // Stopping before re-playing (rather than letting each call overlap the
+  // last) is what gives the clipped, staccato "RPG chatter" sound instead of
+  // a blurred wall of overlapping tones.
+  function playTypeSfx(): void {
+    if (!typeSfx) {
+      if (!game.cache.audio.exists(DIALOGUE_SFX_KEY)) return;
+      typeSfx = game.sound.add(DIALOGUE_SFX_KEY, { volume: DIALOGUE_SFX_VOLUME });
+    }
+    typeSfx.stop();
+    const rate = DIALOGUE_SFX_MIN_RATE + Math.random() * (DIALOGUE_SFX_MAX_RATE - DIALOGUE_SFX_MIN_RATE);
+    typeSfx.play({ rate });
+  }
 
   const layer = document.getElementById('portfolio-dialogue');
   if (!layer) throw new Error('Dialogue mount missing.');
@@ -186,6 +214,9 @@
   // the plain 'ready' state instead of re-prompting.
   let pendingChoices: DialogueChoice[] | null = null;
   let activeChoices: DialogueChoice[] | null = null;
+  // The interactable currently open in the dialogue box, so a chosen
+  // reaction (see EVT_NPC_REACT) knows which NPC it's for.
+  let currentInteractableId: string | null = null;
 
   function clearTimer(): void {
     if (typingTimer !== null) {
@@ -223,6 +254,14 @@
 
     hideChoices();
 
+    if (choice.reaction && currentInteractableId) {
+      window.dispatchEvent(
+        new CustomEvent<NpcReactDetail>(EVT_NPC_REACT, {
+          detail: { id: currentInteractableId, reaction: choice.reaction },
+        })
+      );
+    }
+
     if (choice.href) {
       window.open(choice.href, '_blank', 'noopener,noreferrer');
       closeDialogue();
@@ -230,7 +269,7 @@
     }
 
     if (choice.followUpBody) {
-      pendingChoices = null;
+      pendingChoices = choice.followUpChoices ?? null;
       fullText = choice.followUpBody;
       startTyping();
       return;
@@ -265,6 +304,7 @@
     typingTimer = window.setInterval(() => {
       typedIndex += 1;
       textEl.textContent = fullText.slice(0, typedIndex);
+      playTypeSfx();
       if (typedIndex >= fullText.length) {
         finishTyping();
       }
@@ -279,6 +319,7 @@
     hideChoices();
     fullText = content.body;
     titleEl.textContent = content.title;
+    currentInteractableId = id;
 
     layer.hidden = false;
     interactionState.modalOpen = true;
@@ -295,6 +336,7 @@
     setState('closed');
     layer.hidden = true;
     interactionState.modalOpen = false;
+    currentInteractableId = null;
     window.dispatchEvent(new CustomEvent(EVT_MODAL_CLOSED));
   }
 

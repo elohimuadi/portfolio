@@ -1,0 +1,7 @@
+superpowers:brainstorming
+superpowers:writing-plans
+superpowers:subagent-driven-development
+superpowers:using-git-worktrees
+claude-in-chrome
+claude-in-chrome
+claude-in-chrome

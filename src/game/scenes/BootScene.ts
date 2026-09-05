@@ -4,18 +4,32 @@ const MAP_KEY = 'map';
 const PLAYER_SHEET_KEY = 'player';
 // Shared NPC spritesheet: frames 0-1 are gojocat's idle loop, frames 2-3 are
 // pompompurin's idle loop, frames 4-6 are Shoya's idle loop, frames 7-8 are
-// Claude's blink loop (row-major frame order over a 3×3 grid of 32×32 cells).
+// Claude's blink loop, frame 9 is Golang's static idle frame (row-major frame
+// order over a 4×4 grid of 32×32 cells — frames 10-13 are Golang's
+// look-left/look-right/annoyed-left/annoyed-right, set directly via
+// setFrame() by WorldScene rather than played as animations).
 export const NPC_SHEET_KEY = 'npc-sheet';
 export const GOJOCAT_IDLE_KEY = 'idle-gojocat';
 export const POMPOMPURIN_IDLE_KEY = 'idle-pompompurin';
 export const SHOYA_IDLE_KEY = 'idle-shoya';
 export const CLAUDE_IDLE_KEY = 'idle-claude';
+export const GOLANG_IDLE_KEY = 'idle-golang';
 const GOJOCAT_IDLE_FRAMES = [0, 1];
 const POMPOMPURIN_IDLE_FRAMES = [2, 3];
 const SHOYA_IDLE_FRAMES = [4, 5, 6];
 const CLAUDE_IDLE_FRAMES = [7, 8];
+// Single-frame "loop" — same idiom as the player's per-facing idle anims
+// below (one frame, frameRate 1, repeat -1), since Golang's idle is static.
+const GOLANG_IDLE_FRAME = 9;
 const NPC_IDLE_FRAME_MS = 400;
 export const MAP_SHEET_KEY = 'map-sheet';
+
+// Typewriter blip played once per printed character in both the intro
+// screen and the in-world dialogue box.
+export const DIALOGUE_SFX_KEY = 'sfx-dialogue';
+// Played once each time the choice-UI selection (▶ arrow) moves between
+// options.
+export const SELECT_SFX_KEY = 'sfx-select';
 
 // Decorative prop spritesheet (smollitems-Sheet.png): a 7×7 grid of 32×32
 // cells holding assorted room fixtures. Frame ranges below were identified by
@@ -105,6 +119,9 @@ export class BootScene extends Phaser.Scene {
       frameWidth: 32,
       frameHeight: 32,
     });
+
+    this.load.audio(DIALOGUE_SFX_KEY, '/assets/dialogue.wav');
+    this.load.audio(SELECT_SFX_KEY, '/assets/blip-select.wav');
 
     this.load.tilemapTiledJSON(MAP_KEY, '/assets/map.tmj');
     this.load.image(TILESET_TEXTURE_KEYS.grassdirt, '/assets/tiles/grassdirt.png');
@@ -221,6 +238,15 @@ export class BootScene extends Phaser.Scene {
         }),
         frameRate: 1000 / NPC_IDLE_FRAME_MS,
         yoyo: true,
+        repeat: -1,
+      });
+    }
+
+    if (!this.anims.exists(GOLANG_IDLE_KEY)) {
+      this.anims.create({
+        key: GOLANG_IDLE_KEY,
+        frames: [{ key: NPC_SHEET_KEY, frame: GOLANG_IDLE_FRAME }],
+        frameRate: 1,
         repeat: -1,
       });
     }

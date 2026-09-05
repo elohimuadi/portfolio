@@ -3,23 +3,28 @@ import {
   EVT_CHOICE_CONFIRMED,
   EVT_HIDE_CHOICES,
   EVT_INTERACT,
+  EVT_MODAL_CLOSED,
   EVT_NEAREST_CHANGED,
+  EVT_NPC_REACT,
   EVT_SHOW_CHOICES,
   interactionState,
   type ChoiceConfirmedDetail,
   type InteractDetail,
   type NearestChangedDetail,
+  type NpcReactDetail,
   type ShowChoicesDetail,
 } from '../state';
 import {
   CLAUDE_IDLE_KEY,
   CROSS_ANIM_KEY,
   GOJOCAT_IDLE_KEY,
+  GOLANG_IDLE_KEY,
   MAP_SHEET_KEY,
   MUSIC_PLAYER_ANIM_KEY,
   NPC_SHEET_KEY,
   POMPOMPURIN_IDLE_KEY,
   PROP_SHEET_KEY,
+  SELECT_SFX_KEY,
   SHOYA_IDLE_KEY,
 } from './BootScene';
 
@@ -49,7 +54,7 @@ const CAMERA_FOLLOW_OFFSET_Y = -40;
 // fixed clearance estimate for the dialogue box's typical rendered height —
 // Phaser has no visibility into the DOM box's actual height, so this is an
 // approximation, not a measurement).
-const CHOICE_BOX_WIDTH = 180;
+const CHOICE_BOX_WIDTH = 300;
 const CHOICE_ROW_HEIGHT = 26;
 const CHOICE_BOX_PADDING = 12;
 const CHOICE_BOX_MARGIN_RIGHT = 16;
@@ -118,10 +123,12 @@ const SHOYA_BODY_WIDTH = 20;
 const SHOYA_BODY_HEIGHT = 14;
 const SHOYA_FRAME = 4;
 
-// Claude sits in the west diamond plaza (verified against map.tmj: ground id
-// 29, unblocked, well clear of the corridor at rows 29-30 and the
-// project_hakari fallback interactable point near (9,30)).
-const CLAUDE_TILE_X = 9;
+// Claude sits in the east diamond plaza (Golang joins him there too, see
+// below), verified directly against map.tmj: ground id 29 (dirt) from
+// x=66-73 across rows 20-28/31-32, unblocked (wall/wall2/wal3 all 0), well
+// clear of the corridor at rows 29-30 and the project_sidequest fallback
+// interactable point near (70,30).
+const CLAUDE_TILE_X = 70;
 const CLAUDE_TILE_Y = 26;
 const CLAUDE_ID = 'claude';
 // Trimmed to Claude's small blob silhouette (full sprite bbox is only 16×12px,
@@ -130,6 +137,30 @@ const CLAUDE_ID = 'claude';
 const CLAUDE_BODY_WIDTH = 14;
 const CLAUDE_BODY_HEIGHT = 8;
 const CLAUDE_FRAME = 7;
+
+// Golang sits in the east diamond plaza alongside Claude (verified against
+// map.tmj: ground id 29 (dirt) at (72,22), zero wall/wall2/wal3 collision,
+// inside the east diamond's column range (66-73), and 4.47 tiles from
+// Claude's (70,26) spot — well clear of overlap while staying in the same
+// plaza).
+const GOLANG_TILE_X = 72;
+const GOLANG_TILE_Y = 22;
+const GOLANG_ID = 'golang';
+// Golang is a near-full-frame character like Shoya (not a small blob like
+// Claude) — alpha-channel bounds on the idle frame are (l3,t0,r29,b32); body
+// box covers the torso/legs below the ears/hands (which peak around row 15),
+// excluding the drop shadow at the very bottom, sized to match Shoya's.
+const GOLANG_BODY_WIDTH = 20;
+const GOLANG_BODY_HEIGHT = 14;
+// Frame indices within the shared NPC sheet (see BootScene's sheet comment):
+// 9=idle (played as an animation), 10/11=look-left/right (set directly via
+// setFrame() on interact, based on which side the player approaches from),
+// 12/13=annoyed-left/right (set on picking a "No" choice).
+const GOLANG_FRAME_IDLE = 9;
+const GOLANG_FRAME_LOOK_LEFT = 10;
+const GOLANG_FRAME_LOOK_RIGHT = 11;
+const GOLANG_FRAME_ANNOYED_LEFT = 12;
+const GOLANG_FRAME_ANNOYED_RIGHT = 13;
 
 // All NPCs use a collision box covering only their base/body — the
 // transparent top and visible head have no collision, so the player's body
@@ -140,6 +171,7 @@ const CLAUDE_FRAME = 7;
 // so NPCs get a wider radius covering the farthest reachable point (the
 // blocked approach) so "press E" works from all 4 sides.
 const NPC_INTERACT_RADIUS = 30;
+const SELECT_SFX_VOLUME = 0.45;
 
 // Decorative props from the smollitems spritesheet. Each bbox is the trimmed
 // pixel bounds of that prop's first/only frame within its 32×32 cell (top,
@@ -443,6 +475,7 @@ export class WorldScene extends Phaser.Scene {
   private mapOpen = false;
   private choiceBg?: Phaser.GameObjects.Graphics;
   private choiceArrow?: Phaser.GameObjects.Text;
+  private selectSfx?: Phaser.Sound.BaseSound;
   private choiceTexts: Phaser.GameObjects.Text[] = [];
   private choiceLabels: string[] = [];
   private selectedChoiceIndex = 0;
@@ -460,6 +493,11 @@ export class WorldScene extends Phaser.Scene {
   private pompompurin?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private shoya?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private claude?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
+  private golang?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
+  // Which side the player was on the last time Golang's look/annoyed frame
+  // was set on interact — reused when a "No" choice picks the matching
+  // annoyed frame later in the same conversation.
+  private golangLooksLeft = false;
   private props: Phaser.GameObjects.Sprite[] = [];
   private introComplete = false;
 
@@ -551,6 +589,15 @@ export class WorldScene extends Phaser.Scene {
       radius: NPC_INTERACT_RADIUS,
     });
 
+    this.golang = this.spawnGolang();
+    this.physics.add.collider(this.player, this.golang);
+    this.interactables.push({
+      id: GOLANG_ID,
+      centerX: this.golang.x,
+      centerY: this.golang.y - TILE_SIZE / 2,
+      radius: NPC_INTERACT_RADIUS,
+    });
+
     // Flowers/grass-detail have no physics body at all (collides:false), so
     // only the subset that does collide (hobby items) goes into the collider.
     const collidableProps: Phaser.Types.Physics.Arcade.SpriteWithStaticBody[] = [];
@@ -625,6 +672,8 @@ export class WorldScene extends Phaser.Scene {
     this.setupInput();
     this.setupWind();
     this.setupChoiceEvents();
+    this.setupNpcReactionEvents();
+    this.selectSfx = this.sound.add(SELECT_SFX_KEY, { volume: SELECT_SFX_VOLUME });
 
     this.scale.on('resize', this.handleResize, this);
     this.events.once('shutdown', () => {
@@ -649,6 +698,7 @@ export class WorldScene extends Phaser.Scene {
       this.pompompurin,
       this.shoya,
       this.claude,
+      this.golang,
       ...this.props,
       this.controlsHint,
     ].filter((t): t is NonNullable<typeof t> => t !== undefined);
@@ -765,6 +815,7 @@ export class WorldScene extends Phaser.Scene {
     this.pompompurin?.setDepth(this.pompompurin.y);
     this.shoya?.setDepth(this.shoya.y);
     this.claude?.setDepth(this.claude.y);
+    this.golang?.setDepth(this.golang.y);
     for (const prop of this.props) prop.setDepth(prop.y);
   }
 
@@ -875,13 +926,16 @@ export class WorldScene extends Phaser.Scene {
     bodyWidth: number,
     bodyHeight: number,
     idleKey: string,
-    scale: number = 1
+    scale: number = 1,
+    offsetY: number = 0,
+    offsetX: number = 0
   ): Phaser.Types.Physics.Arcade.SpriteWithStaticBody {
     // Origin (0.5, 1) matches the player convention: (x, y) is the feet, so the
     // sprite sits flush on the tile row it's placed on — feet land on the
-    // bottom edge of (tileX, tileY).
-    const feetX = tileX * TILE_SIZE + TILE_SIZE / 2;
-    const feetY = (tileY + 1) * TILE_SIZE;
+    // bottom edge of (tileX, tileY). offsetX/offsetY nudge the feet position
+    // in pixels for fine visual placement without changing the occupied tile.
+    const feetX = tileX * TILE_SIZE + TILE_SIZE / 2 + offsetX;
+    const feetY = (tileY + 1) * TILE_SIZE + offsetY;
 
     const sprite = this.physics.add
       .staticSprite(feetX, feetY, NPC_SHEET_KEY, frame)
@@ -948,6 +1002,8 @@ export class WorldScene extends Phaser.Scene {
   private spawnClaude(): Phaser.Types.Physics.Arcade.SpriteWithStaticBody {
     // Scaled to match the player's own sprite scale (both are 32×32 source
     // frames, so the same factor makes them read as the same size on screen).
+    // Nudged up 22px and right 8px from the tile's natural feet position for
+    // visual placement within the plaza.
     return this.spawnNpc(
       CLAUDE_TILE_X,
       CLAUDE_TILE_Y,
@@ -955,6 +1011,22 @@ export class WorldScene extends Phaser.Scene {
       CLAUDE_BODY_WIDTH,
       CLAUDE_BODY_HEIGHT,
       CLAUDE_IDLE_KEY,
+      PLAYER_SPRITE_SCALE,
+      -22,
+      8
+    );
+  }
+
+  private spawnGolang(): Phaser.Types.Physics.Arcade.SpriteWithStaticBody {
+    // Scaled to match the player's own sprite scale, same as Shoya/Claude
+    // (Golang is a near-full-frame character, not a small blob).
+    return this.spawnNpc(
+      GOLANG_TILE_X,
+      GOLANG_TILE_Y,
+      GOLANG_FRAME_IDLE,
+      GOLANG_BODY_WIDTH,
+      GOLANG_BODY_HEIGHT,
+      GOLANG_IDLE_KEY,
       PLAYER_SPRITE_SCALE
     );
   }
@@ -1013,6 +1085,7 @@ export class WorldScene extends Phaser.Scene {
       { col: POMPOMPURIN_TILE_X, row: POMPOMPURIN_TILE_Y },
       { col: SHOYA_TILE_X, row: SHOYA_TILE_Y },
       { col: CLAUDE_TILE_X, row: CLAUDE_TILE_Y },
+      { col: GOLANG_TILE_X, row: GOLANG_TILE_Y },
       { col: CROSS_TILE_X, row: CROSS_TILE_Y },
       { col: BOBA_TILE_X, row: BOBA_TILE_Y },
     ];
@@ -1101,6 +1174,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.pompompurin) worldObjects.push(this.pompompurin);
     if (this.shoya) worldObjects.push(this.shoya);
     if (this.claude) worldObjects.push(this.claude);
+    if (this.golang) worldObjects.push(this.golang);
     worldObjects.push(...this.props);
     if (this.marker) worldObjects.push(this.marker);
     this.uiCamera.ignore(worldObjects);
@@ -1250,11 +1324,24 @@ export class WorldScene extends Phaser.Scene {
     if (!pressedE && !pressedSpace) return;
 
     this.faceInteractable(nearest);
+    if (nearest.id === GOLANG_ID) this.updateGolangLookFrame();
 
     window.dispatchEvent(
       new CustomEvent<InteractDetail>(EVT_INTERACT, {
         detail: { id: nearest.id },
       })
+    );
+  }
+
+  // Sets Golang's look-left/look-right frame based on which side the player
+  // approached from, and remembers the side so a later "No" pick (see
+  // setupNpcReactionEvents) shows the matching annoyed frame.
+  private updateGolangLookFrame(): void {
+    if (!this.golang) return;
+    this.golangLooksLeft = this.player.x < this.golang.x;
+    this.golang.anims.stop();
+    this.golang.setFrame(
+      this.golangLooksLeft ? GOLANG_FRAME_LOOK_LEFT : GOLANG_FRAME_LOOK_RIGHT
     );
   }
 
@@ -1437,6 +1524,40 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  // Reacts to a picked dialogue choice's `reaction` (see EVT_NPC_REACT) by
+  // swapping Golang's frame to the annoyed variant matching the side he was
+  // last facing, and resets him back to his idle loop once any dialogue
+  // closes (EVT_MODAL_CLOSED fires on every dialogue close, not just his —
+  // resuming an already-playing anim with ignoreIfPlaying:true is a no-op).
+  private setupNpcReactionEvents(): void {
+    const onNpcReact = (event: Event) => {
+      const detail = (event as CustomEvent<NpcReactDetail>).detail;
+      if (!detail) return;
+      if (detail.id === GOLANG_ID && detail.reaction === 'annoyed') {
+        this.setGolangAnnoyedFrame();
+      }
+    };
+    const onModalClosed = () => {
+      this.golang?.anims.play(GOLANG_IDLE_KEY, true);
+    };
+
+    window.addEventListener(EVT_NPC_REACT, onNpcReact);
+    window.addEventListener(EVT_MODAL_CLOSED, onModalClosed);
+
+    this.events.once('shutdown', () => {
+      window.removeEventListener(EVT_NPC_REACT, onNpcReact);
+      window.removeEventListener(EVT_MODAL_CLOSED, onModalClosed);
+    });
+  }
+
+  private setGolangAnnoyedFrame(): void {
+    if (!this.golang) return;
+    this.golang.anims.stop();
+    this.golang.setFrame(
+      this.golangLooksLeft ? GOLANG_FRAME_ANNOYED_LEFT : GOLANG_FRAME_ANNOYED_RIGHT
+    );
+  }
+
   private createChoiceUI(): void {
     // Black rectangle background, drawn with Graphics (not a Rectangle
     // shape) per spec — filled black, bordered in the same cream used
@@ -1455,11 +1576,11 @@ export class WorldScene extends Phaser.Scene {
   // Top-left corner of the choice box for a given row count — computed
   // fresh each time (not cached) so it stays correct across resizes. Right
   // edge approximates the DOM dialogue box's own right edge (which is
-  // centered, width min(640px, 100%), inset by its 16px layer padding) so
+  // centered, width min(880px, 100%), inset by its 16px layer padding) so
   // the box reads as "above-right of the dialogue" without measuring the
   // DOM directly.
   private getChoiceBoxTopLeft(rowCount: number): { x: number; y: number } {
-    const dialogueWidth = Math.min(640, this.scale.width);
+    const dialogueWidth = Math.min(880, this.scale.width);
     const boxRight = (this.scale.width + dialogueWidth) / 2 - CHOICE_BOX_MARGIN_RIGHT;
     const boxBottom = this.scale.height - CHOICE_BOX_MARGIN_BOTTOM;
     const boxHeight = CHOICE_BOX_PADDING * 2 + CHOICE_ROW_HEIGHT * rowCount;
@@ -1526,6 +1647,14 @@ export class WorldScene extends Phaser.Scene {
     this.choiceArrow.setPosition(x + CHOICE_BOX_PADDING, target.y + target.height / 2);
   }
 
+  // Stop-then-play (rather than letting overlapping presses stack) so rapid
+  // up/down mashing stays a crisp single blip per move instead of a mush.
+  private playSelectSfx(): void {
+    if (!this.selectSfx) return;
+    this.selectSfx.stop();
+    this.selectSfx.play();
+  }
+
   private handleChoiceInput(): void {
     const count = this.choiceLabels.length;
     if (count === 0) return;
@@ -1538,12 +1667,16 @@ export class WorldScene extends Phaser.Scene {
       (this.cursors.down ? Phaser.Input.Keyboard.JustDown(this.cursors.down) : false);
 
     if (upPressed) {
-      this.selectedChoiceIndex = (this.selectedChoiceIndex - 1 + count) % count;
+      const nextIndex = (this.selectedChoiceIndex - 1 + count) % count;
+      if (nextIndex !== this.selectedChoiceIndex) this.playSelectSfx();
+      this.selectedChoiceIndex = nextIndex;
       this.repositionChoiceArrow();
       return;
     }
     if (downPressed) {
-      this.selectedChoiceIndex = (this.selectedChoiceIndex + 1) % count;
+      const nextIndex = (this.selectedChoiceIndex + 1) % count;
+      if (nextIndex !== this.selectedChoiceIndex) this.playSelectSfx();
+      this.selectedChoiceIndex = nextIndex;
       this.repositionChoiceArrow();
       return;
     }
