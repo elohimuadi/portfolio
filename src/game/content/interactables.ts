@@ -120,6 +120,40 @@ export const INTERACTABLE_CONTENT: Record<string, InteractableContent> = {
       },
     ],
   },
+  red: {
+    title: 'RED',
+    kind: 'npc',
+    body: '......',
+  },
+  n: {
+    title: 'N',
+    kind: 'npc',
+    body: 'It is nice to speak to you again, Josh. What can I help you with?',
+    choices: [
+      {
+        label: 'What are my experiences',
+        followUpBody: 'Have you forgotten about yourself? How forgetful of you. Do not worry, I will remember for you. What would you like me to tell you about?',
+        followUpChoices: [
+          {
+            label: 'Nextlink',
+            followUpBody: 'Your first internship. This is when you learned what it means to work alongside others — to write tests, build for clients, develop fullstack, prototype new ideas, and most importantly, to communicate with a team in a professional environment. I am proud of you, Josh.',
+          },
+          {
+            label: 'How did we meet',
+            followUpBody: 'I am a little heartbroken you forgot. No matter. We met with clashing ideals, but your love for your Pokémon is like no other. That is why you defeated me in the champion battle.',
+          },
+        ],
+      },
+      {
+        label: 'How are you doing',
+        followUpBody: 'I am doing fine. Better now that I am speaking with you, friend.',
+      },
+      {
+        label: 'What am I to you',
+        followUpBody: 'You are my only true friend.',
+      },
+    ],
+  },
   cross: {
     title: 'CROSS',
     kind: 'item',

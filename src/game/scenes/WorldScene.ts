@@ -21,6 +21,7 @@ import {
   GOLANG_IDLE_KEY,
   MAP_SHEET_KEY,
   MUSIC_PLAYER_ANIM_KEY,
+  N_IDLE_KEY,
   NPC_SHEET_KEY,
   POMPOMPURIN_IDLE_KEY,
   PROP_SHEET_KEY,
@@ -161,6 +162,12 @@ const GOLANG_FRAME_LOOK_LEFT = 10;
 const GOLANG_FRAME_LOOK_RIGHT = 11;
 const GOLANG_FRAME_ANNOYED_LEFT = 12;
 const GOLANG_FRAME_ANNOYED_RIGHT = 13;
+
+// Clear dirt tiles in the west plaza, near each other.
+const RED_TILE_X = 8;
+const RED_TILE_Y = 26;
+const N_TILE_X = 11;
+const N_TILE_Y = 26;
 
 // All NPCs use a collision box covering only their base/body — the
 // transparent top and visible head have no collision, so the player's body
@@ -494,6 +501,8 @@ export class WorldScene extends Phaser.Scene {
   private shoya?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private claude?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private golang?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
+  private red?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
+  private n?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   // Which side the player was on the last time Golang's look/annoyed frame
   // was set on interact — reused when a "No" choice picks the matching
   // annoyed frame later in the same conversation.
@@ -598,6 +607,19 @@ export class WorldScene extends Phaser.Scene {
       radius: NPC_INTERACT_RADIUS,
     });
 
+    // Red is sheet cell 15 (zero-based frame 14), with no animation.
+    this.red = this.spawnNpc(RED_TILE_X, RED_TILE_Y, 14, 14, 12, undefined, PLAYER_SPRITE_SCALE);
+    this.n = this.spawnNpc(N_TILE_X, N_TILE_Y, 15, 16, 12, N_IDLE_KEY, PLAYER_SPRITE_SCALE);
+    for (const [id, npc] of [['red', this.red], ['n', this.n]] as const) {
+      this.physics.add.collider(this.player, npc);
+      this.interactables.push({
+        id,
+        centerX: npc.x,
+        centerY: npc.y - TILE_SIZE / 2,
+        radius: NPC_INTERACT_RADIUS,
+      });
+    }
+
     // Flowers/grass-detail have no physics body at all (collides:false), so
     // only the subset that does collide (hobby items) goes into the collider.
     const collidableProps: Phaser.Types.Physics.Arcade.SpriteWithStaticBody[] = [];
@@ -699,6 +721,8 @@ export class WorldScene extends Phaser.Scene {
       this.shoya,
       this.claude,
       this.golang,
+      this.red,
+      this.n,
       ...this.props,
       this.controlsHint,
     ].filter((t): t is NonNullable<typeof t> => t !== undefined);
@@ -816,6 +840,8 @@ export class WorldScene extends Phaser.Scene {
     this.shoya?.setDepth(this.shoya.y);
     this.claude?.setDepth(this.claude.y);
     this.golang?.setDepth(this.golang.y);
+    this.red?.setDepth(this.red.y);
+    this.n?.setDepth(this.n.y);
     for (const prop of this.props) prop.setDepth(prop.y);
   }
 
@@ -925,7 +951,7 @@ export class WorldScene extends Phaser.Scene {
     frame: number,
     bodyWidth: number,
     bodyHeight: number,
-    idleKey: string,
+    idleKey: string | undefined,
     scale: number = 1,
     offsetY: number = 0,
     offsetX: number = 0
@@ -955,10 +981,8 @@ export class WorldScene extends Phaser.Scene {
     sprite.body.position.set(feetX - scaledWidth / 2, feetY - scaledHeight);
     sprite.body.updateCenter();
 
-    // Two-frame idle only — shadow is baked into the PNG frames, so no
-    // additional shadow object or bob tween is added here. The sprite stays
-    // stationary and cycles between its two idle frames in place.
-    sprite.anims.play(idleKey);
+    // Static NPCs keep their initial frame; others play their idle in place.
+    if (idleKey) sprite.anims.play(idleKey);
 
     return sprite;
   }
@@ -1086,6 +1110,8 @@ export class WorldScene extends Phaser.Scene {
       { col: SHOYA_TILE_X, row: SHOYA_TILE_Y },
       { col: CLAUDE_TILE_X, row: CLAUDE_TILE_Y },
       { col: GOLANG_TILE_X, row: GOLANG_TILE_Y },
+      { col: RED_TILE_X, row: RED_TILE_Y },
+      { col: N_TILE_X, row: N_TILE_Y },
       { col: CROSS_TILE_X, row: CROSS_TILE_Y },
       { col: BOBA_TILE_X, row: BOBA_TILE_Y },
     ];
@@ -1175,6 +1201,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.shoya) worldObjects.push(this.shoya);
     if (this.claude) worldObjects.push(this.claude);
     if (this.golang) worldObjects.push(this.golang);
+    if (this.red) worldObjects.push(this.red);
+    if (this.n) worldObjects.push(this.n);
     worldObjects.push(...this.props);
     if (this.marker) worldObjects.push(this.marker);
     this.uiCamera.ignore(worldObjects);

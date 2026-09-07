@@ -5,7 +5,7 @@ const PLAYER_SHEET_KEY = 'player';
 // Shared NPC spritesheet: frames 0-1 are gojocat's idle loop, frames 2-3 are
 // pompompurin's idle loop, frames 4-6 are Shoya's idle loop, frames 7-8 are
 // Claude's blink loop, frame 9 is Golang's static idle frame (row-major frame
-// order over a 4×4 grid of 32×32 cells — frames 10-13 are Golang's
+// order over a 5×4 grid of 32×32 cells — frames 10-13 are Golang's
 // look-left/look-right/annoyed-left/annoyed-right, set directly via
 // setFrame() by WorldScene rather than played as animations).
 export const NPC_SHEET_KEY = 'npc-sheet';
@@ -14,6 +14,7 @@ export const POMPOMPURIN_IDLE_KEY = 'idle-pompompurin';
 export const SHOYA_IDLE_KEY = 'idle-shoya';
 export const CLAUDE_IDLE_KEY = 'idle-claude';
 export const GOLANG_IDLE_KEY = 'idle-golang';
+export const N_IDLE_KEY = 'idle-n';
 const GOJOCAT_IDLE_FRAMES = [0, 1];
 const POMPOMPURIN_IDLE_FRAMES = [2, 3];
 const SHOYA_IDLE_FRAMES = [4, 5, 6];
@@ -103,12 +104,12 @@ export class BootScene extends Phaser.Scene {
       if (this.barFill) this.barFill.width = BAR_WIDTH * value;
     });
 
-    this.load.spritesheet(PLAYER_SHEET_KEY, '/assets/character.png', {
+    this.load.spritesheet(PLAYER_SHEET_KEY, '/assets/s-sheet.png', {
       frameWidth: 32,
       frameHeight: 32,
     });
 
-    this.load.spritesheet(NPC_SHEET_KEY, '/assets/n-sheet.png', {
+    this.load.spritesheet(NPC_SHEET_KEY, '/assets/npc-sheet.png', {
       frameWidth: 32,
       frameHeight: 32,
     });
@@ -190,6 +191,16 @@ export class BootScene extends Phaser.Scene {
   }
 
   private registerNpcAnimations(): void {
+    // Sheet cells 16 and 17 (one-based) are N's open/closed eyes.
+    if (!this.anims.exists(N_IDLE_KEY)) {
+      this.anims.create({
+        key: N_IDLE_KEY,
+        frames: this.anims.generateFrameNumbers(NPC_SHEET_KEY, { frames: [15, 16] }),
+        frameRate: 1000 / 900,
+        yoyo: true,
+        repeat: -1,
+      });
+    }
     // Two-frame idles at 400ms per frame → 2.5 fps, shared across NPCs on the
     // combined spritesheet.
     if (!this.anims.exists(GOJOCAT_IDLE_KEY)) {
