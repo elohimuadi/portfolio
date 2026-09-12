@@ -264,8 +264,6 @@
 
     if (choice.href) {
       window.open(choice.href, '_blank', 'noopener,noreferrer');
-      closeDialogue();
-      return;
     }
 
     if (choice.followUpBody) {
@@ -311,6 +309,9 @@
     }, TYPE_SPEED_MS);
   }
 
+  // Session count deliberately survives closing/reopening the dialogue.
+  let trashcanInteractions = 0;
+
   function openDialogue(id: string): void {
     const content = INTERACTABLE_CONTENT[id];
     if (!content) return;
@@ -318,6 +319,18 @@
     pendingChoices = content.choices ?? null;
     hideChoices();
     fullText = content.body;
+    if (id === 'trashcan') {
+      trashcanInteractions += 1;
+      if (trashcanInteractions < 3) {
+        fullText = trashcanInteractions === 1
+          ? 'its just a normal trash can'
+          : 'its just a normal trash can\n...or is it?';
+        pendingChoices = null;
+      }
+      window.dispatchEvent(new CustomEvent<NpcReactDetail>(EVT_NPC_REACT, {
+        detail: { id, reaction: trashcanInteractions >= 3 ? 'reveal' : 'hide' },
+      }));
+    }
     titleEl.textContent = content.title;
     currentInteractableId = id;
 

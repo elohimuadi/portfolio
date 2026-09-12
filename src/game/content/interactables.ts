@@ -120,6 +120,17 @@ export const INTERACTABLE_CONTENT: Record<string, InteractableContent> = {
       },
     ],
   },
+  trashcan: {
+    title: 'TRASHCAN',
+    kind: 'npc',
+    body: 'psst what you trynna buy fool',
+    choices: [
+      { label: 'X', href: 'https://x.com/tsenjosh', followUpBody: 'heres the link, dont blow my cover now', reaction: 'hide' },
+      { label: 'YouTube', href: 'https://www.youtube.com/@TsenJosh', followUpBody: 'heres the link, dont blow my cover now', reaction: 'hide' },
+      { label: 'GitHub', href: 'https://github.com/elohimuadi', followUpBody: 'heres the link, dont blow my cover now', reaction: 'hide' },
+      { label: 'I dont like being under the influence', followUpBody: 'then scram', reaction: 'hide' },
+    ],
+  },
   red: {
     title: 'RED',
     kind: 'npc',

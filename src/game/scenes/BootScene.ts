@@ -15,6 +15,11 @@ export const SHOYA_IDLE_KEY = 'idle-shoya';
 export const CLAUDE_IDLE_KEY = 'idle-claude';
 export const GOLANG_IDLE_KEY = 'idle-golang';
 export const N_IDLE_KEY = 'idle-n';
+export const BIG_NPC_SHEET_KEY = 'big-npc-sheet';
+export const BUSH_SHEET_KEY = 'bush-tiles';
+export const NO_FACE_REACT_KEY = 'no-face-react';
+export const TRASHCAN_CLOSED_FRAME = 17;
+export const TRASHCAN_OPEN_FRAME = 18;
 const GOJOCAT_IDLE_FRAMES = [0, 1];
 const POMPOMPURIN_IDLE_FRAMES = [2, 3];
 const SHOYA_IDLE_FRAMES = [4, 5, 6];
@@ -114,6 +119,11 @@ export class BootScene extends Phaser.Scene {
       frameHeight: 32,
     });
 
+    this.load.spritesheet(BIG_NPC_SHEET_KEY, '/assets/bignpc-sheet.png', {
+      frameWidth: 64,
+      frameHeight: 128,
+    });
+
     this.load.image(MAP_SHEET_KEY, '/assets/map.png');
 
     this.load.spritesheet(PROP_SHEET_KEY, '/assets/smollitems-sheet.png', {
@@ -128,6 +138,10 @@ export class BootScene extends Phaser.Scene {
     this.load.image(TILESET_TEXTURE_KEYS.grassdirt, '/assets/tiles/grassdirt.png');
     this.load.image(TILESET_TEXTURE_KEYS.largeitem, '/assets/tiles/largeitems.png');
     this.load.image(TILESET_TEXTURE_KEYS.miditem, '/assets/tiles/miditems.png');
+    this.load.spritesheet(BUSH_SHEET_KEY, '/assets/tiles/miditems.png', {
+      frameWidth: 32,
+      frameHeight: 32,
+    });
     this.load.image(TILESET_TEXTURE_KEYS.smallitems, '/assets/tiles/smollitems.png');
   }
 
@@ -191,6 +205,15 @@ export class BootScene extends Phaser.Scene {
   }
 
   private registerNpcAnimations(): void {
+    if (!this.anims.exists(NO_FACE_REACT_KEY)) {
+      this.anims.create({
+        key: NO_FACE_REACT_KEY,
+        frames: this.anims.generateFrameNumbers(BIG_NPC_SHEET_KEY, { start: 0, end: 4 }),
+        frameRate: 5,
+        yoyo: true,
+        repeat: 0,
+      });
+    }
     // Sheet cells 16 and 17 (one-based) are N's open/closed eyes.
     if (!this.anims.exists(N_IDLE_KEY)) {
       this.anims.create({

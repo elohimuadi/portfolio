@@ -16,6 +16,11 @@ import {
 } from '../state';
 import {
   CLAUDE_IDLE_KEY,
+  BIG_NPC_SHEET_KEY,
+  BUSH_SHEET_KEY,
+  NO_FACE_REACT_KEY,
+  TRASHCAN_CLOSED_FRAME,
+  TRASHCAN_OPEN_FRAME,
   CROSS_ANIM_KEY,
   GOJOCAT_IDLE_KEY,
   GOLANG_IDLE_KEY,
@@ -88,6 +93,20 @@ const TILE_SIZE = 32;
 // Wall/wall2/wal3 tiles (trees, bushes) collide only on their bottom slice so
 // the player can walk behind the foliage tops for a 2.5D depth effect.
 const WALL_COLLISION_HEIGHT = 12;
+// miditems.png bushes span two 32px tiles. Visible pixels occupy sheet rows
+// 24–44; collide only with rows 33–44 (the lower 57%). These horizontal
+// bands follow the alpha silhouette, excluding transparent sides/corners.
+const BUSH_BASE_BANDS = [
+  { x: 8, y: 1, width: 21, height: 1 },
+  { x: 7, y: 2, width: 22, height: 1 },
+  { x: 6, y: 3, width: 23, height: 2 },
+  { x: 7, y: 5, width: 21, height: 3 },
+  { x: 8, y: 8, width: 19, height: 1 },
+  { x: 9, y: 9, width: 17, height: 1 },
+  { x: 11, y: 10, width: 14, height: 1 },
+  { x: 12, y: 11, width: 11, height: 1 },
+  { x: 14, y: 12, width: 7, height: 1 },
+] as const;
 // Verified against map.tmj: a 7×7 block of plain grass tiles (id 15), clear
 // of wall/wall2/wal3 collision and dirt-path tiles, and away from the other
 // interactables/spawn.
@@ -168,6 +187,10 @@ const RED_TILE_X = 8;
 const RED_TILE_Y = 26;
 const N_TILE_X = 11;
 const N_TILE_Y = 26;
+const TRASHCAN_TILE_X = 42;
+const TRASHCAN_TILE_Y = 54;
+const NO_FACE_TILE_X = 35;
+const NO_FACE_TILE_Y = 44;
 
 // All NPCs use a collision box covering only their base/body — the
 // transparent top and visible head have no collision, so the player's body
@@ -492,6 +515,7 @@ export class WorldScene extends Phaser.Scene {
   private wallLayer?: Phaser.Tilemaps.TilemapLayer;
   private wall2Layer?: Phaser.Tilemaps.TilemapLayer;
   private wal3Layer?: Phaser.Tilemaps.TilemapLayer;
+  private bushTiles: Array<{ image: Phaser.GameObjects.Image; baseX: number; layer: Phaser.Tilemaps.TilemapLayer }> = [];
   private mapWidthPx = 0;
   private mapHeightPx = 0;
   private wind = { amp: 0 };
@@ -503,6 +527,8 @@ export class WorldScene extends Phaser.Scene {
   private golang?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private red?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   private n?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
+  private trashcan?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
+  private noFace?: Phaser.Types.Physics.Arcade.SpriteWithStaticBody;
   // Which side the player was on the last time Golang's look/annoyed frame
   // was set on interact — reused when a "No" choice picks the matching
   // annoyed frame later in the same conversation.
@@ -537,8 +563,8 @@ export class WorldScene extends Phaser.Scene {
       throw new Error('Missing one or more expected tile layers in map.');
     }
     // Collision on wall/wall2/wal3 is handled by a trimmed static group built
-    // below — one rectangle per placed tile, sized to the tile's bottom slice
-    // (see WALL_COLLISION_HEIGHT). We deliberately skip setCollisionByExclusion
+    // below: trees use a bottom slice, bushes use their visible lower outline.
+    // We deliberately skip setCollisionByExclusion
     // and don't register a collider against the layer itself, so the tops of
     // trees and bushes have no collision at all.
 
@@ -558,6 +584,7 @@ export class WorldScene extends Phaser.Scene {
       WALL_COLLISION_HEIGHT
     );
     this.physics.add.collider(this.player, wallColliders);
+    this.createDepthSortedBushes([wall, wall2, wal3]);
 
     this.gojocat = this.spawnGojocat();
     this.physics.add.collider(this.player, this.gojocat);
@@ -618,6 +645,21 @@ export class WorldScene extends Phaser.Scene {
         centerY: npc.y - TILE_SIZE / 2,
         radius: NPC_INTERACT_RADIUS,
       });
+    }
+
+    this.trashcan = this.spawnNpc(TRASHCAN_TILE_X, TRASHCAN_TILE_Y, TRASHCAN_CLOSED_FRAME, 20, 14, undefined, PLAYER_SPRITE_SCALE);
+    // Natural 64×128 size, with a base-only collision footprint.
+    this.noFace = this.spawnNpc(NO_FACE_TILE_X, NO_FACE_TILE_Y, 0, 44, 22, undefined, 1, 0, 0, BIG_NPC_SHEET_KEY);
+    // Visible feet end at row 117; anchor there rather than in the 10px padding.
+    // The manually positioned collision base and Y-depth now match the artwork.
+    this.noFace.setOrigin(0.5, 118 / 128);
+    this.noFace.on('animationcomplete', () => this.noFace?.setFrame(0));
+    for (const [id, npc, radius] of [
+      ['trashcan', this.trashcan, NPC_INTERACT_RADIUS],
+      ['no-face', this.noFace, 44],
+    ] as const) {
+      this.physics.add.collider(this.player, npc);
+      this.interactables.push({ id, centerX: npc.x, centerY: npc.y - TILE_SIZE / 2, radius });
     }
 
     // Flowers/grass-detail have no physics body at all (collides:false), so
@@ -716,6 +758,7 @@ export class WorldScene extends Phaser.Scene {
       this.wallLayer,
       this.wall2Layer,
       this.wal3Layer,
+      ...this.bushTiles.map(({ image }) => image),
       this.gojocat,
       this.pompompurin,
       this.shoya,
@@ -723,6 +766,8 @@ export class WorldScene extends Phaser.Scene {
       this.golang,
       this.red,
       this.n,
+      this.trashcan,
+      this.noFace,
       ...this.props,
       this.controlsHint,
     ].filter((t): t is NonNullable<typeof t> => t !== undefined);
@@ -835,6 +880,7 @@ export class WorldScene extends Phaser.Scene {
     // Y-sort: whoever is lower on screen (larger y) renders in front, so the
     // player, NPCs, and props occlude each other correctly as they cross paths.
     this.player.setDepth(this.player.y);
+    for (const { image } of this.bushTiles) image.setDepth(image.y);
     this.gojocat?.setDepth(this.gojocat.y);
     this.pompompurin?.setDepth(this.pompompurin.y);
     this.shoya?.setDepth(this.shoya.y);
@@ -842,6 +888,8 @@ export class WorldScene extends Phaser.Scene {
     this.golang?.setDepth(this.golang.y);
     this.red?.setDepth(this.red.y);
     this.n?.setDepth(this.n.y);
+    this.trashcan?.setDepth(this.trashcan.y);
+    this.noFace?.setDepth(this.noFace.y);
     for (const prop of this.props) prop.setDepth(prop.y);
   }
 
@@ -922,18 +970,52 @@ export class WorldScene extends Phaser.Scene {
     return sprite;
   }
 
+  private createDepthSortedBushes(layers: Phaser.Tilemaps.TilemapLayer[]): void {
+    this.bushTiles = [];
+    for (const layer of layers) {
+      layer.forEachTile((tile) => {
+        if (tile.index <= 0 || tile.tileset?.name !== 'miditem') return;
+        const frame = tile.index - tile.tileset.firstgid;
+        if (frame !== 0 && frame !== 1) return;
+        // The 64px bush's visible base is at y=45, matching the bottom of
+        // BUSH_BASE_BANDS. Both halves share that feet anchor and depth.
+        const baseOffset = frame === 0 ? 45 : 13;
+        const image = this.add.image(tile.pixelX, tile.pixelY + baseOffset, BUSH_SHEET_KEY, frame)
+          .setOrigin(0, baseOffset / TILE_SIZE)
+          .setDepth(tile.pixelY + baseOffset);
+        this.bushTiles.push({ image, baseX: tile.pixelX, layer });
+        // Retain tile data for collision/placement, but draw it only once.
+        tile.alpha = 0;
+      });
+    }
+  }
+
   private buildTrimmedWallColliders(
     layers: Phaser.Tilemaps.TilemapLayer[],
     bodyHeight: number
   ): Phaser.Physics.Arcade.StaticGroup {
-    // One invisible static rectangle per placed tile, sized to the tile's
-    // bottom `bodyHeight` px. Uses tile world coords (not layer.x, which the
-    // wind sway nudges by ~1 px — imperceptibly out of sync). Empty positions
-    // in the Tiled layer have index -1 or 0 and are skipped.
+    // Use tile world coords, independent of the decorative wind sway.
     const group = this.physics.add.staticGroup();
     for (const layer of layers) {
       layer.forEachTile((tile) => {
         if (tile.index <= 0) return;
+        if (tile.tileset?.name === 'miditem') {
+          const frame = tile.index - tile.tileset.firstgid;
+          // The upper bush tile is all padding/canopy, with no solid base.
+          if (frame === 0) return;
+          if (frame === 1) {
+            for (const band of BUSH_BASE_BANDS) {
+              const rect = this.add.rectangle(tile.pixelX, tile.pixelY, TILE_SIZE, TILE_SIZE)
+                .setOrigin(0, 0).setVisible(false);
+              this.physics.add.existing(rect, true);
+              group.add(rect);
+              const body = rect.body as Phaser.Physics.Arcade.StaticBody;
+              body.setSize(band.width, band.height, false);
+              body.setOffset(band.x, band.y);
+            }
+            return;
+          }
+        }
         const cx = tile.pixelX + TILE_SIZE / 2;
         const cy = tile.pixelY + TILE_SIZE - bodyHeight / 2;
         const rect = this.add.rectangle(cx, cy, TILE_SIZE, bodyHeight);
@@ -954,7 +1036,8 @@ export class WorldScene extends Phaser.Scene {
     idleKey: string | undefined,
     scale: number = 1,
     offsetY: number = 0,
-    offsetX: number = 0
+    offsetX: number = 0,
+    textureKey: string = NPC_SHEET_KEY
   ): Phaser.Types.Physics.Arcade.SpriteWithStaticBody {
     // Origin (0.5, 1) matches the player convention: (x, y) is the feet, so the
     // sprite sits flush on the tile row it's placed on — feet land on the
@@ -964,7 +1047,7 @@ export class WorldScene extends Phaser.Scene {
     const feetY = (tileY + 1) * TILE_SIZE + offsetY;
 
     const sprite = this.physics.add
-      .staticSprite(feetX, feetY, NPC_SHEET_KEY, frame)
+      .staticSprite(feetX, feetY, textureKey, frame)
       .setOrigin(0.5, 1)
       .setScale(scale);
 
@@ -1112,6 +1195,8 @@ export class WorldScene extends Phaser.Scene {
       { col: GOLANG_TILE_X, row: GOLANG_TILE_Y },
       { col: RED_TILE_X, row: RED_TILE_Y },
       { col: N_TILE_X, row: N_TILE_Y },
+      { col: TRASHCAN_TILE_X, row: TRASHCAN_TILE_Y },
+      { col: NO_FACE_TILE_X, row: NO_FACE_TILE_Y },
       { col: CROSS_TILE_X, row: CROSS_TILE_Y },
       { col: BOBA_TILE_X, row: BOBA_TILE_Y },
     ];
@@ -1195,6 +1280,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.wallLayer) worldObjects.push(this.wallLayer);
     if (this.wall2Layer) worldObjects.push(this.wall2Layer);
     if (this.wal3Layer) worldObjects.push(this.wal3Layer);
+    worldObjects.push(...this.bushTiles.map(({ image }) => image));
     if (this.player) worldObjects.push(this.player);
     if (this.gojocat) worldObjects.push(this.gojocat);
     if (this.pompompurin) worldObjects.push(this.pompompurin);
@@ -1203,6 +1289,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.golang) worldObjects.push(this.golang);
     if (this.red) worldObjects.push(this.red);
     if (this.n) worldObjects.push(this.n);
+    if (this.trashcan) worldObjects.push(this.trashcan);
+    if (this.noFace) worldObjects.push(this.noFace);
     worldObjects.push(...this.props);
     if (this.marker) worldObjects.push(this.marker);
     this.uiCamera.ignore(worldObjects);
@@ -1352,6 +1440,13 @@ export class WorldScene extends Phaser.Scene {
     if (!pressedE && !pressedSpace) return;
 
     this.faceInteractable(nearest);
+    if (nearest.id === 'no-face') {
+      // Repeated input must not restart an in-progress reaction.
+      if (this.noFace && !this.noFace.anims.isPlaying) {
+        this.noFace.anims.play(NO_FACE_REACT_KEY);
+      }
+      return;
+    }
     if (nearest.id === GOLANG_ID) this.updateGolangLookFrame();
 
     window.dispatchEvent(
@@ -1561,12 +1656,16 @@ export class WorldScene extends Phaser.Scene {
     const onNpcReact = (event: Event) => {
       const detail = (event as CustomEvent<NpcReactDetail>).detail;
       if (!detail) return;
+      if (detail.id === 'trashcan') {
+        this.trashcan?.setFrame(detail.reaction === 'reveal' ? TRASHCAN_OPEN_FRAME : TRASHCAN_CLOSED_FRAME);
+      }
       if (detail.id === GOLANG_ID && detail.reaction === 'annoyed') {
         this.setGolangAnnoyedFrame();
       }
     };
     const onModalClosed = () => {
       this.golang?.anims.play(GOLANG_IDLE_KEY, true);
+      this.trashcan?.setFrame(TRASHCAN_CLOSED_FRAME);
     };
 
     window.addEventListener(EVT_NPC_REACT, onNpcReact);
@@ -1648,6 +1747,9 @@ export class WorldScene extends Phaser.Scene {
         })
         .setOrigin(0, 0)
         .setDepth(41);
+      // Keep longer choices inside the box without overlapping the selector.
+      const availableWidth = CHOICE_BOX_WIDTH - CHOICE_TEXT_START_X - CHOICE_BOX_PADDING;
+      if (text.width > availableWidth) text.setFontSize(Math.floor(14 * availableWidth / text.width));
       // Dynamic per-render objects — each needs its own ignore registration,
       // unlike the static choiceBg/choiceArrow handled once in setupUICamera().
       this.cameras.main.ignore(text);
@@ -1741,5 +1843,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.wallLayer) this.wallLayer.x = swing * WIND_AMP_TREES;
     if (this.wall2Layer) this.wall2Layer.x = swing * WIND_AMP_TREES * 0.9;
     if (this.wal3Layer) this.wal3Layer.x = swing * WIND_AMP_BUSHES;
+    for (const { image, baseX, layer } of this.bushTiles) {
+      image.x = baseX + layer.x;
+    }
   }
 }
