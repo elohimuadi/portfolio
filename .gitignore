@@ -3,6 +3,9 @@ dist/
 .astro/
 .vercel/
 
+# local agent worktrees
+.claude/worktrees/
+
 # dependencies
 node_modules/
 
