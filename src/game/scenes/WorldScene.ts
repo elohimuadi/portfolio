@@ -1239,7 +1239,8 @@ export class WorldScene extends Phaser.Scene {
     triangle.setStrokeStyle(1, 0x141414);
     triangle.setOrigin(0.5, 0.5);
     triangle.setVisible(false);
-    triangle.setDepth(10);
+    // World sprites sort by feet Y; keep the indicator above all of them.
+    triangle.setDepth(this.mapHeightPx + TILE_SIZE);
     this.marker = triangle;
   }
 
@@ -1422,9 +1423,24 @@ export class WorldScene extends Phaser.Scene {
       this.marker.setVisible(false);
       return;
     }
-    this.markerBaseY = nearest.centerY - 14;
+    const npcs: Record<string, Phaser.GameObjects.Sprite | undefined> = {
+      gojocat: this.gojocat,
+      pompompurin: this.pompompurin,
+      shoya: this.shoya,
+      claude: this.claude,
+      golang: this.golang,
+      red: this.red,
+      n: this.n,
+      trashcan: this.trashcan,
+      'no-face': this.noFace,
+    };
+    const npc = npcs[nearest.id];
+    // Use rendered bounds, including scale and origin (especially No-Face),
+    // rather than the interaction point near the collision body's base.
+    // 10px clearance leaves room for the triangle's height and 2px bob.
+    this.markerBaseY = npc ? npc.getTopCenter().y - 10 : nearest.centerY - 14;
     this.marker.setVisible(true);
-    this.marker.x = nearest.centerX;
+    this.marker.x = npc ? npc.getTopCenter().x : nearest.centerX;
     this.marker.y = this.markerBaseY + Math.sin(this.time.now / 180) * 2;
   }
 
