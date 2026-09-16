@@ -168,7 +168,7 @@ export const INTERACTABLE_CONTENT: Record<string, InteractableContent> = {
   cross: {
     title: 'CROSS',
     kind: 'item',
-    body: `Jesus, thank you for dying on the cross for me, your blood sheds me of my sins, you are my King, my God`,
+    body: 'thank you for loving me Jesus',
   },
   trophy: {
     title: 'BOXING GLOVES',

@@ -458,6 +458,7 @@ function placeKinds<K extends PropKind>(
 }
 
 type Interactable = {
+  sprite?: Phaser.GameObjects.Sprite;
   id: string;
   centerX: number;
   centerY: number;
@@ -491,6 +492,7 @@ export class WorldScene extends Phaser.Scene {
   private keyEsc!: Phaser.Input.Keyboard.Key;
   private interactables: Interactable[] = [];
   private marker?: Phaser.GameObjects.Triangle;
+  private visibleTopCache = new WeakMap<Phaser.Textures.Frame, number>();
   private hint?: Phaser.GameObjects.Text;
   private controlsHint?: Phaser.GameObjects.Text;
   private controlsOverlayBg?: Phaser.GameObjects.Rectangle;
@@ -689,6 +691,7 @@ export class WorldScene extends Phaser.Scene {
         if (isHobbyKind(placement.kind) && def.interactable !== false) {
           this.interactables.push({
             id: placement.kind,
+            sprite,
             centerX: sprite.x,
             centerY: sprite.y - TILE_SIZE / 2,
             radius: def.interactRadius ?? NPC_INTERACT_RADIUS,
@@ -1414,6 +1417,35 @@ export class WorldScene extends Phaser.Scene {
     this.setHintVisible(nearest !== null);
   }
 
+  private getVisibleTop(sprite: Phaser.GameObjects.Sprite): number {
+    const frame = sprite.frame;
+    let top = this.visibleTopCache.get(frame);
+    if (top === undefined) {
+      const canvas = document.createElement('canvas');
+      canvas.width = frame.cutWidth;
+      canvas.height = frame.cutHeight;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) throw new Error('Unable to inspect sprite alpha.');
+      context.drawImage(
+        frame.source.image as CanvasImageSource,
+        frame.cutX, frame.cutY, frame.cutWidth, frame.cutHeight,
+        0, 0, frame.cutWidth, frame.cutHeight
+      );
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+      top = 0;
+      scan: for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+          if (pixels[(y * canvas.width + x) * 4 + 3] > 0) {
+            top = y;
+            break scan;
+          }
+        }
+      }
+      this.visibleTopCache.set(frame, top);
+    }
+    return sprite.y + (top - sprite.displayOriginY) * sprite.scaleY;
+  }
+
   private setMarkerTarget(nearest: Interactable | null): void {
     if (!this.marker) return;
     if (!nearest) {
@@ -1431,11 +1463,10 @@ export class WorldScene extends Phaser.Scene {
       trashcan: this.trashcan,
       'no-face': this.noFace,
     };
-    const npc = npcs[nearest.id];
-    // Use rendered bounds, including scale and origin (especially No-Face),
-    // rather than the interaction point near the collision body's base.
+    const npc = nearest.sprite ?? npcs[nearest.id];
+    // Anchor to the current frame's visible pixels in scaled world space.
     // 10px clearance leaves room for the triangle's height and 2px bob.
-    this.markerBaseY = npc ? npc.getTopCenter().y - 10 : nearest.centerY - 14;
+    this.markerBaseY = npc ? this.getVisibleTop(npc) - 10 : nearest.centerY - 14;
     this.marker.setVisible(true);
     this.marker.x = npc ? npc.getTopCenter().x : nearest.centerX;
     this.marker.y = this.markerBaseY + Math.sin(this.time.now / 180) * 2;
