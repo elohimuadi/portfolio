@@ -470,9 +470,6 @@ type Interactable = {
 // "about" placeholder (top diamond, empty dirt) was removed — that spot is
 // now occupied by the real cross interactable.
 const FALLBACK_INTERACTABLES: ReadonlyArray<Interactable> = [
-  { id: 'project_sidequest', centerX: 2260, centerY: 960 },
-  { id: 'contact', centerX: 1280, centerY: 1720 },
-  { id: 'project_hakari', centerX: 300, centerY: 960 },
 ];
 
 type Facing = 'down' | 'left' | 'right' | 'up';
