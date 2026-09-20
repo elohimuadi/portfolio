@@ -1,4 +1,5 @@
 ---
+import Analytics from '@vercel/analytics/astro';
 import Game from '../components/Game.astro';
 ---
 
@@ -8,6 +9,7 @@ import Game from '../components/Game.astro';
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Portfolio</title>
+    <Analytics />
   </head>
   <body>
     <Game />

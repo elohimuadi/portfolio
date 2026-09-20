@@ -12,10 +12,14 @@
   },
   "dependencies": {
     "@astrojs/vercel": "^11.0.10",
+    "@vercel/analytics": "^2.0.1",
     "astro": "^7.3.3",
     "phaser": "^3.87.0"
   },
   "devDependencies": {
     "typescript": "^5.6.0"
+  },
+  "overrides": {
+    "path-to-regexp": "6.3.0"
   }
 }
