@@ -231,7 +231,7 @@ export class BootScene extends Phaser.Scene {
     this.counter?.destroy();
     this.counter = undefined;
 
-    this.titleText = new HandText(this, cx, cy - 16, 'PORTFOLIO', {
+    this.titleText = new HandText(this, cx, cy - 16, 'GOL', {
       size: 20,
       color: '#111111',
     }).setOrigin(0.5);
