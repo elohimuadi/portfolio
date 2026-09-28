@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { DIALOGUE_SFX_KEY } from './BootScene';
+import { HandText } from '../handtext';
 
 const INTRO_LINES = [
   'There lives a boy named Josh that loves lavenders,',
@@ -9,8 +10,9 @@ const INTRO_LINES = [
 const CHAR_INTERVAL_MS = 40;
 const TEXT_COLOR = '#ffffff';
 const BG_COLOR = '#000000';
-const BODY_FONT_SIZE = 12;
-const PROMPT_FONT_SIZE = 10;
+// Cap heights (px) for the hand-drawn font.
+const BODY_FONT_SIZE = 17;
+const PROMPT_FONT_SIZE = 14;
 const SIDE_PADDING = 24;
 const PROMPT_MARGIN = 12;
 const DIALOGUE_SFX_VOLUME = 0.35;
@@ -18,8 +20,8 @@ const DIALOGUE_SFX_MIN_RATE = 0.9;
 const DIALOGUE_SFX_MAX_RATE = 1.1;
 
 export class IntroScene extends Phaser.Scene {
-  private bodyText?: Phaser.GameObjects.Text;
-  private promptText?: Phaser.GameObjects.Text;
+  private bodyText?: HandText;
+  private promptText?: HandText;
   private promptTween?: Phaser.Tweens.Tween;
   private typeEvent?: Phaser.Time.TimerEvent;
   private typeSfx?: Phaser.Sound.BaseSound;
@@ -41,24 +43,23 @@ export class IntroScene extends Phaser.Scene {
 
     const { cx, cy } = this.center();
 
-    this.bodyText = this.add
-      .text(cx, cy, '', {
-        fontFamily: 'monospace',
-        fontSize: `${BODY_FONT_SIZE}px`,
-        color: TEXT_COLOR,
-        align: 'center',
-        wordWrap: { width: this.wrapWidth() },
-      })
-      .setOrigin(0.5);
+    // Laid out in full up front and revealed a character at a time, so lines
+    // don't re-wrap while typing.
+    this.bodyText = new HandText(this, cx, cy, this.fullText, {
+      size: BODY_FONT_SIZE,
+      color: TEXT_COLOR,
+      align: 'center',
+      wrapWidth: this.wrapWidth(),
+    })
+      .setOrigin(0.5)
+      .setVisibleCount(0);
 
     this.typeSfx = this.sound.add(DIALOGUE_SFX_KEY, { volume: DIALOGUE_SFX_VOLUME });
 
-    this.promptText = this.add
-      .text(0, 0, '[ click to continue ]', {
-        fontFamily: 'monospace',
-        fontSize: `${PROMPT_FONT_SIZE}px`,
-        color: TEXT_COLOR,
-      })
+    this.promptText = new HandText(this, 0, 0, '[ click to continue ]', {
+      size: PROMPT_FONT_SIZE,
+      color: TEXT_COLOR,
+    })
       .setOrigin(1, 1)
       .setVisible(false);
     this.positionPrompt();
@@ -86,7 +87,7 @@ export class IntroScene extends Phaser.Scene {
   private tickTyping(): void {
     if (!this.bodyText) return;
     this.charIndex += 1;
-    this.bodyText.setText(this.fullText.slice(0, this.charIndex));
+    this.bodyText.setVisibleCount(this.charIndex);
     this.playTypeSfx();
     if (this.charIndex >= this.fullText.length) {
       this.finishTyping();
@@ -108,7 +109,7 @@ export class IntroScene extends Phaser.Scene {
     this.typingDone = true;
     this.typeEvent?.remove(false);
     this.typeEvent = undefined;
-    this.bodyText?.setText(this.fullText);
+    this.bodyText?.setVisibleCount(Infinity);
     if (this.promptText) {
       this.promptText.setVisible(true);
       this.promptTween = this.tweens.add({
@@ -138,7 +139,7 @@ export class IntroScene extends Phaser.Scene {
   private handleResize(): void {
     const { cx, cy } = this.center();
     this.bodyText?.setPosition(cx, cy);
-    this.bodyText?.setWordWrapWidth(this.wrapWidth());
+    this.bodyText?.setWordWrapWidth(this.wrapWidth()).setOrigin(0.5);
     this.positionPrompt();
   }
 

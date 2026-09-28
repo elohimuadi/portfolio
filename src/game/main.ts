@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
+import { FontScene } from './scenes/FontScene';
 import { IntroScene } from './scenes/IntroScene';
 import { TransitionScene } from './scenes/TransitionScene';
 import { WorldScene } from './scenes/WorldScene';
@@ -36,7 +37,7 @@ export function startGame(parentId: string): Phaser.Game {
         debug: false,
       },
     },
-    scene: [BootScene, IntroScene, TransitionScene, WorldScene],
+    scene: [FontScene, BootScene, IntroScene, TransitionScene, WorldScene],
   });
 
   return instance;

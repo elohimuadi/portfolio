@@ -17,7 +17,7 @@
     <div class="dialogue-title-box" id="dialogue-title" data-dialogue-title>—</div>
     <div class="dialogue-body-box">
       <p class="dialogue-text" id="dialogue-body-text" data-dialogue-text></p>
-      <span class="dialogue-advance" aria-hidden="true" data-dialogue-advance>▼</span>
+      <span class="dialogue-advance" aria-hidden="true" data-dialogue-advance></span>
     </div>
   </div>
 </div>
@@ -57,7 +57,7 @@
 
   .dialogue {
     width: min(880px, 100%);
-    color: #f6f4ee;
+    color: #000000;
     /* Plain 'monospace' — the exact font-family string BootScene/IntroScene
        use for their Phaser text (fontFamily: 'monospace'), so the DOM
        dialogue and the Phaser boot/intro screens read as the same font. */
@@ -65,54 +65,156 @@
     animation: dialogue-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
   }
 
+  /* Both boxes are Josh's drawings, 9-sliced with border-image so they
+     stretch to any size; `fill` paints the drawing's white inside too. The
+     script swaps --box-img every 125ms for the boil. */
   .dialogue-title-box {
     display: inline-block;
-    background: #0d0d0d;
-    border: 3px solid #f6f4ee;
-    padding: 6px 16px 5px;
+    border: 12px solid transparent;
+    border-image-source: var(--box-img);
+    border-image-slice: 40 fill; /* TITLEBOX_SLICE */
+    border-image-width: 20px;
+    border-image-repeat: stretch;
+    padding: 10px 16px 4px;
     margin-left: 18px;
-    margin-bottom: -3px; /* overlap with body box border */
-    font-size: 12px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
+    margin-bottom: -16px; /* tuck the tab over the body box's top line */
+    font-size: 16px;
+    line-height: 1.5;
     position: relative;
     z-index: 1;
-    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
   }
 
   .dialogue-body-box {
     position: relative;
-    background: #0d0d0d;
-    border: 3px solid #f6f4ee;
-    padding: 26px 32px 34px;
-    min-height: 136px;
-    box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.45);
+    border: 30px solid transparent;
+    border-image-source: var(--box-img);
+    border-image-slice: 80 fill; /* TEXTBOX_SLICE */
+    border-image-width: 40px;
+    border-image-repeat: stretch;
+    padding: 20px 12px 16px;
+    min-height: 120px;
   }
 
   .dialogue-text {
     margin: 0;
     /* No font-family override — inherits monospace from .dialogue. */
     font-size: 16px;
-    line-height: 1.55;
+    /* Taller than the old 1.55: the hand-drawn capitals are ~18px and
+       descenders need room so lines don't touch. */
+    line-height: 1.9;
     letter-spacing: 0.01em;
-    color: #f6f4ee;
+    color: #000000;
     min-height: 4.5em;
     white-space: pre-wrap;
   }
 
-  .dialogue-advance {
-    position: absolute;
-    right: 16px;
-    bottom: 10px;
-    font-size: 12px;
-    color: #f6f4ee;
-    opacity: 0;
-    pointer-events: none;
+  /* ---- Hand-drawn font (see src/game/handfont.ts) ----------------------
+     Glyphs are built at runtime, so these rules are :global. Each .hg is a
+     zero-height inline box sitting on the baseline; its ::before carries the
+     sprite strip as a mask, filled with currentColor. --hand-cell and
+     --hand-baseline are set on the text element from the generated metrics. */
+  .dialogue :global(.hw) {
+    display: inline-block;
+    white-space: nowrap;
   }
 
+  .dialogue :global(.hs) {
+    display: inline-block;
+  }
+
+  .dialogue :global(.hg),
+  .dialogue :global(.hf) {
+    visibility: hidden;
+  }
+
+  .dialogue :global(.hg.on),
+  .dialogue :global(.hf.on) {
+    visibility: visible;
+  }
+
+  .dialogue :global(.hg) {
+    display: inline-block;
+    position: relative;
+    width: var(--adv);
+    height: 0;
+    vertical-align: baseline;
+  }
+
+  .dialogue :global(.hg)::before {
+    content: '';
+    position: absolute;
+    left: calc(-1 * var(--lsb));
+    top: calc(-1 * var(--hand-baseline));
+    width: var(--cw);
+    height: var(--hand-cell);
+    background-color: currentColor;
+    -webkit-mask-image: var(--img);
+    mask-image: var(--img);
+    -webkit-mask-size: calc(var(--cw) * 7) var(--hand-cell);
+    mask-size: calc(var(--cw) * 7) var(--hand-cell);
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: 0 0;
+    mask-position: 0 0;
+    animation: hand-boil 625ms steps(5, end) infinite;
+    animation-delay: var(--delay);
+  }
+
+  /* Glitch tick: jump to one of the left-hand frames (6th or 7th). */
+  .dialogue :global(.hg.glitch)::before {
+    animation: none;
+    -webkit-mask-position: calc(var(--cw) * var(--gf) * -1) 0;
+    mask-position: calc(var(--cw) * var(--gf) * -1) 0;
+  }
+
+  /* Punctuation/digits not drawn yet: regular font, sized to sit with the
+     hand-drawn letters. */
+  .dialogue :global(.hf) {
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .dialogue :global(.hand-sr) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  @keyframes hand-boil {
+    from {
+      -webkit-mask-position: 0 0;
+      mask-position: 0 0;
+    }
+    to {
+      -webkit-mask-position: calc(var(--cw) * -5) 0;
+      mask-position: calc(var(--cw) * -5) 0;
+    }
+  }
+
+  /* Squiggle in the corner: grows while the line types, then loops the
+     finished squiggles in place of the old ▼. Frame set by the script via
+     --sq-frame; the strip is SQUIGGLE in src/game/ui-art.ts. */
+  .dialogue-advance {
+    position: absolute;
+    /* Sits inside the drawn outline, clear of its wobbly bottom-right edge. */
+    right: 16px;
+    bottom: 6px;
+    width: 28px;
+    height: 25px;
+    background-image: url('/assets/ui/squiggle.png');
+    background-repeat: no-repeat;
+    background-size: calc(28px * 35) 25px;
+    background-position: calc(-28px * var(--sq-frame, 0)) 0;
+    pointer-events: none;
+    visibility: hidden;
+  }
+
+  .dialogue[data-state='typing'] .dialogue-advance,
   .dialogue[data-state='ready'] .dialogue-advance {
-    opacity: 1;
-    animation: advance-bob 900ms steps(2) infinite;
+    visibility: visible;
   }
 
   @keyframes dialogue-in {
@@ -126,20 +228,11 @@
     }
   }
 
-  @keyframes advance-bob {
-    from {
-      transform: translateY(0);
-    }
-    to {
-      transform: translateY(3px);
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .dialogue {
       animation: none;
     }
-    .dialogue[data-state='ready'] .dialogue-advance {
+    .dialogue :global(.hg)::before {
       animation: none;
     }
   }
@@ -161,6 +254,17 @@
   } from '../game/state';
   import { INTERACTABLE_CONTENT, type DialogueChoice } from '../game/content/interactables';
   import { DIALOGUE_SFX_KEY } from '../game/scenes/BootScene';
+  import { HANDFONT } from '../game/content/handfont-metrics';
+  import { preloadHandFont, renderHandText, revealHand, startHandGlitches } from '../game/handfont';
+  import {
+    BOX_FRAME_MS,
+    SQUIGGLE,
+    TEXTBOX_FRAMES,
+    TITLEBOX_FRAMES,
+    UI_FRAME_MS,
+    textboxUrl,
+    titleboxUrl,
+  } from '../game/ui-art';
 
   const TYPE_SPEED_MS = 35;
   const DIALOGUE_SFX_VOLUME = 0.35;
@@ -197,13 +301,72 @@
   const dialogueEl = layer.querySelector<HTMLElement>('[data-dialogue]');
   const titleEl = layer.querySelector<HTMLElement>('[data-dialogue-title]');
   const textEl = layer.querySelector<HTMLElement>('[data-dialogue-text]');
-  if (!dialogueEl || !titleEl || !textEl) {
+  const bodyBoxEl = layer.querySelector<HTMLElement>('.dialogue-body-box');
+  const advanceEl = layer.querySelector<HTMLElement>('[data-dialogue-advance]');
+  if (!dialogueEl || !titleEl || !textEl || !bodyBoxEl || !advanceEl) {
     throw new Error('Dialogue template missing required slots.');
   }
 
   const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  // Set on the whole dialogue so both the title and the body pick them up.
+  dialogueEl.style.setProperty('--hand-cell', `${HANDFONT.cellHeight}px`);
+  dialogueEl.style.setProperty('--hand-baseline', `${HANDFONT.baseline}px`);
+  preloadHandFont();
+  startHandGlitches(dialogueEl);
+
+  // ---- Hand-drawn boxes + squiggle ------------------------------------
+  // Preload every box frame so the boil never shows a half-loaded image.
+  // Kept in an array: an unreferenced Image can be collected mid-download.
+  const uiPreload: HTMLImageElement[] = [];
+  const preloadUi = (src: string) => {
+    const img = new Image();
+    img.src = src;
+    uiPreload.push(img);
+  };
+  for (let i = 0; i < TEXTBOX_FRAMES; i++) preloadUi(textboxUrl(i));
+  for (let i = 0; i < TITLEBOX_FRAMES; i++) preloadUi(titleboxUrl(i));
+  preloadUi(SQUIGGLE.url);
+
+  let uiTick = 0;
+  let squiggleMode: 'growing' | 'looping' = 'growing';
+  function setSquiggleFrame(frame: number): void {
+    advanceEl.style.setProperty('--sq-frame', String(frame));
+  }
+  const BOX_EVERY = Math.round(BOX_FRAME_MS / UI_FRAME_MS); // ticks per box frame
+  function drawBoxes(): void {
+    const boxTick = Math.floor(uiTick / BOX_EVERY);
+    bodyBoxEl.style.setProperty('--box-img', `url("${textboxUrl(boxTick % TEXTBOX_FRAMES)}")`);
+    // Offset so the tab and the body don't change drawing on the same beat.
+    titleEl.style.setProperty('--box-img', `url("${titleboxUrl((boxTick + 3) % TITLEBOX_FRAMES)}")`);
+  }
+  drawBoxes();
+  setSquiggleFrame(0);
+  if (!prefersReducedMotion) {
+    window.setInterval(() => {
+      if (layer.hidden) return;
+      uiTick += 1;
+      drawBoxes();
+      if (squiggleMode === 'looping') {
+        setSquiggleFrame(SQUIGGLE.growth + (uiTick % SQUIGGLE.complete));
+      }
+    }, UI_FRAME_MS);
+  }
+
+  // Squiggle draws itself in as the line types: progress 0..1 -> growth frame.
+  function growSquiggle(progress: number): void {
+    squiggleMode = 'growing';
+    setSquiggleFrame(Math.min(SQUIGGLE.growth - 1, Math.floor(progress * SQUIGGLE.growth)));
+  }
+  function loopSquiggle(): void {
+    squiggleMode = 'looping';
+    setSquiggleFrame(SQUIGGLE.growth);
+  }
+
   let fullText = '';
+  // One element per character of fullText (see renderHandText); the
+  // typewriter reveals them in order instead of re-setting textContent.
+  let handUnits: HTMLElement[] = [];
   let typedIndex = 0;
   let typingTimer: number | null = null;
   let isTyping = false;
@@ -225,7 +388,7 @@
     }
   }
 
-  function setState(state: 'typing' | 'ready' | 'closed'): void {
+  function setState(state: 'typing' | 'ready' | 'choosing' | 'closed'): void {
     if (state === 'closed') {
       dialogueEl.removeAttribute('data-state');
     } else {
@@ -278,21 +441,26 @@
 
   function finishTyping(): void {
     clearTimer();
-    textEl.textContent = fullText;
+    revealHand(handUnits, handUnits.length);
     isTyping = false;
     if (pendingChoices && pendingChoices.length > 0) {
+      // Squiggle hides while the choice box is up (CSS shows it only in
+      // typing/ready).
+      setState('choosing');
       showChoices(pendingChoices);
     } else {
       setState('ready');
+      loopSquiggle();
     }
   }
 
   function startTyping(): void {
     clearTimer();
     typedIndex = 0;
-    textEl.textContent = '';
+    handUnits = renderHandText(textEl, fullText);
     isTyping = true;
     setState('typing');
+    growSquiggle(0);
 
     if (prefersReducedMotion) {
       finishTyping();
@@ -301,7 +469,8 @@
 
     typingTimer = window.setInterval(() => {
       typedIndex += 1;
-      textEl.textContent = fullText.slice(0, typedIndex);
+      handUnits[typedIndex - 1]?.classList.add('on');
+      growSquiggle(typedIndex / Math.max(1, fullText.length));
       playTypeSfx();
       if (typedIndex >= fullText.length) {
         finishTyping();
@@ -331,7 +500,9 @@
         detail: { id, reaction: trashcanInteractions >= 3 ? 'reveal' : 'hide' },
       }));
     }
-    titleEl.textContent = content.title;
+    // Title is shown in full right away (no typewriter), uppercased the way
+    // the old text-transform did it, since CSS can't uppercase mask glyphs.
+    revealHand(renderHandText(titleEl, content.title.toUpperCase()), Infinity);
     currentInteractableId = id;
 
     layer.hidden = false;

@@ -1,4 +1,13 @@
 import Phaser from 'phaser';
+import { HandText } from '../handtext';
+import {
+  ARROW_RIGHT,
+  EYE,
+  MARKER_DOWN,
+  SELECT,
+  SQUIGGLE,
+  UI_FRAME_MS,
+} from '../ui-art';
 import {
   EVT_CHOICE_CONFIRMED,
   EVT_HIDE_CHOICES,
@@ -30,6 +39,7 @@ import {
   NPC_SHEET_KEY,
   POMPOMPURIN_IDLE_KEY,
   PROP_SHEET_KEY,
+  DIALOGUE_SFX_KEY,
   SELECT_SFX_KEY,
   SHOYA_IDLE_KEY,
 } from './BootScene';
@@ -54,22 +64,18 @@ const MAP_DOT_COLOR = 0x8a7a94; // desaturated purple
 // down so the player sits higher on screen (undoes visible top padding).
 const CAMERA_FOLLOW_OFFSET_Y = -40;
 
-// Yes/No choice UI — pure Phaser (Graphics/Text on the UI camera), no DOM
-// involved. Positioned above-right of where the DOM dialogue box sits
-// (dialogue-layer's own right padding is 16px; CHOICE_BOX_MARGIN_BOTTOM is a
-// fixed clearance estimate for the dialogue box's typical rendered height —
-// Phaser has no visibility into the DOM box's actual height, so this is an
-// approximation, not a measurement).
-const CHOICE_BOX_WIDTH = 300;
-const CHOICE_ROW_HEIGHT = 26;
-const CHOICE_BOX_PADDING = 12;
-const CHOICE_BOX_MARGIN_RIGHT = 16;
-const CHOICE_BOX_MARGIN_BOTTOM = 210;
-const CHOICE_TEXT_START_X = CHOICE_BOX_PADDING + 18; // leaves room for the arrow
-const CHOICE_BG_COLOR = 0x000000;
-const CHOICE_BORDER_COLOR = 0xf6f4ee;
-const CHOICE_BORDER_WIDTH = 3;
-const CHOICE_TEXT_COLOR = '#ffffff';
+// Choice UI — pure Phaser (on the UI camera), no DOM. Options float in the
+// top-right corner of the screen: no box, all written at the dialogue's size
+// with a soft white glow so black ink stays readable over grass and path.
+// The selected option gets Josh's lavender sprig growing in behind it.
+const CHOICE_FONT_SIZE = 20; // cap height, same as the dialogue text
+const CHOICE_ROW_GAP = 8;
+const CHOICE_MARGIN_TOP = 28;
+const CHOICE_MARGIN_RIGHT = 32;
+const CHOICE_TEXT_START_X = 32; // leaves room for the arrow
+const CHOICE_TEXT_COLOR = '#000000';
+const CHOICE_HIGHLIGHT_PAD_X = 16; // sprig extends this far past the text
+const CHOICE_HIGHLIGHT_PAD_Y = 14;
 
 // Wind sway — foliage layers get a subtle intermittent horizontal swing.
 // Amplitudes stay in single-pixel territory so any player-vs-wall collision
@@ -491,21 +497,33 @@ export class WorldScene extends Phaser.Scene {
   private keyM!: Phaser.Input.Keyboard.Key;
   private keyEsc!: Phaser.Input.Keyboard.Key;
   private interactables: Interactable[] = [];
-  private marker?: Phaser.GameObjects.Triangle;
+  private marker?: Phaser.GameObjects.Sprite;
   private visibleTopCache = new WeakMap<Phaser.Textures.Frame, number>();
-  private hint?: Phaser.GameObjects.Text;
-  private controlsHint?: Phaser.GameObjects.Text;
+  private hint?: Phaser.GameObjects.Sprite;
+  private hintFrame = -1;
+  private hintState: 'hidden' | 'opening' | 'open' | 'closing' = 'hidden';
+  // First-time prompt at the bottom middle, written out after the intro
+  // reveal; movement stays locked until C is pressed once.
+  private controlsHint?: HandText;
+  private controlsHintSquiggle?: Phaser.GameObjects.Sprite;
+  private controlsHintTyped = 0;
+  private controlsHintTimer?: Phaser.Time.TimerEvent;
+  private awaitingFirstControls = true;
+  private promptSfx?: Phaser.Sound.BaseSound;
   private controlsOverlayBg?: Phaser.GameObjects.Rectangle;
-  private controlsOverlayText?: Phaser.GameObjects.Text;
+  private controlsOverlayText?: HandText;
   private controlsOpen = false;
   private mapOverlayBg?: Phaser.GameObjects.Rectangle;
   private mapImage?: Phaser.GameObjects.Image;
   private mapDot?: Phaser.GameObjects.Arc;
   private mapOpen = false;
-  private choiceBg?: Phaser.GameObjects.Graphics;
-  private choiceArrow?: Phaser.GameObjects.Text;
+  private choiceArrow?: Phaser.GameObjects.Sprite;
+  private choiceHighlight?: Phaser.GameObjects.Sprite;
+  private choiceHighlightTimer?: Phaser.Time.TimerEvent;
+  private choiceColumnX = 0;
+  private uiBoilTick = 0;
   private selectSfx?: Phaser.Sound.BaseSound;
-  private choiceTexts: Phaser.GameObjects.Text[] = [];
+  private choiceTexts: HandText[] = [];
   private choiceLabels: string[] = [];
   private selectedChoiceIndex = 0;
   private markerBaseY = 0;
@@ -713,6 +731,7 @@ export class WorldScene extends Phaser.Scene {
     this.createControlsOverlay();
     this.createMapOverlay();
     this.createChoiceUI();
+    this.startUiBoil();
     this.setupUICamera();
     this.updateCameraZoom();
 
@@ -769,7 +788,6 @@ export class WorldScene extends Phaser.Scene {
       this.trashcan,
       this.noFace,
       ...this.props,
-      this.controlsHint,
     ].filter((t): t is NonNullable<typeof t> => t !== undefined);
 
     for (const target of worldTargets) target.setAlpha(0);
@@ -790,6 +808,7 @@ export class WorldScene extends Phaser.Scene {
         duration: INTRO_WORLD_REVEAL_MS,
         onComplete: () => {
           this.introComplete = true;
+          this.startControlsPrompt();
         },
       });
     });
@@ -805,6 +824,17 @@ export class WorldScene extends Phaser.Scene {
       // playing because it was started in spawnPlayer(); wind/tile positions
       // stay put because applyWindSway() never runs; input is ignored.
       (this.player.body as Phaser.Physics.Arcade.Body).setVelocity(0, 0);
+      return;
+    }
+
+    if (this.awaitingFirstControls) {
+      // Locked in place until the player presses C for the first time.
+      (this.player.body as Phaser.Physics.Arcade.Body).setVelocity(0, 0);
+      this.player.anims.play(`idle-${this.facing}`, true);
+      if (Phaser.Input.Keyboard.JustDown(this.keyC)) {
+        this.dismissControlsPrompt();
+        this.openControls();
+      }
       return;
     }
 
@@ -1235,28 +1265,80 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private createMarker(): void {
-    const triangle = this.add.triangle(0, 0, 0, 0, 8, 0, 4, 6, 0xf6f4ee);
-    triangle.setStrokeStyle(1, 0x141414);
-    triangle.setOrigin(0.5, 0.5);
-    triangle.setVisible(false);
+    // Josh's hand-drawn down arrow, boiling like the text. ~11 world px wide.
+    const marker = this.add
+      .sprite(0, 0, MARKER_DOWN.key, 0)
+      .setOrigin(0.5, 0.5)
+      .setScale(11 / MARKER_DOWN.frameWidth)
+      .setVisible(false);
     // World sprites sort by feet Y; keep the indicator above all of them.
-    triangle.setDepth(this.mapHeightPx + TILE_SIZE);
-    this.marker = triangle;
+    marker.setDepth(this.mapHeightPx + TILE_SIZE);
+    this.marker = marker;
+  }
+
+  // One shared 8fps tick for every hand-drawn UI piece in the world.
+  private startUiBoil(): void {
+    this.time.addEvent({
+      delay: UI_FRAME_MS,
+      loop: true,
+      callback: () => {
+        this.uiBoilTick += 1;
+        const t = this.uiBoilTick;
+        this.marker?.setFrame(t % MARKER_DOWN.frames);
+        this.choiceArrow?.setFrame((t + 2) % ARROW_RIGHT.frames);
+        this.stepHintEye();
+        if (
+          this.controlsHintSquiggle &&
+          this.controlsHintTyped >= this.controlsPromptText.length
+        ) {
+          this.controlsHintSquiggle.setFrame(SQUIGGLE.growth + (t % SQUIGGLE.complete));
+        }
+      },
+    });
   }
 
   private createHint(): void {
-    const text = this.add
-      .text(this.scale.width / 2, this.scale.height - 14, '[E]  LOOK', {
-        fontFamily: 'monospace',
-        fontSize: '10px',
-        color: '#141414',
-        backgroundColor: '#f6f4ee',
-        padding: { left: 6, right: 6, top: 3, bottom: 3 },
-      })
+    // The "look" prompt: Josh's eye with an E in it, ~64px wide. It opens when
+    // something is in reach, then keeps blinking between the open frames.
+    const eye = this.add
+      .sprite(this.scale.width / 2, this.scale.height - 24, EYE.key, 0)
       .setOrigin(0.5, 0.5)
+      .setScale(64 / EYE.frameWidth)
       .setDepth(20);
-    text.setVisible(false);
-    this.hint = text;
+    eye.setVisible(false);
+    this.hint = eye;
+  }
+
+  private stepHintEye(): void {
+    if (!this.hint) return;
+    switch (this.hintState) {
+      case 'opening':
+        if (this.hintFrame < EYE.opening - 1) {
+          this.hintFrame += 1;
+        } else {
+          this.hintState = 'open';
+          this.hintFrame = EYE.opening;
+        }
+        break;
+      case 'open': {
+        const open = EYE.frames - EYE.opening;
+        this.hintFrame = EYE.opening + ((this.hintFrame - EYE.opening + 1) % open);
+        break;
+      }
+      case 'closing':
+        if (this.hintFrame > 0) {
+          this.hintFrame -= 1;
+        } else {
+          this.hintState = 'hidden';
+          this.hintFrame = -1;
+          this.hint.setVisible(false);
+          return;
+        }
+        break;
+      default:
+        return;
+    }
+    this.hint.setFrame(this.hintFrame);
   }
 
   private setupUICamera(): void {
@@ -1268,13 +1350,14 @@ export class WorldScene extends Phaser.Scene {
 
     if (this.hint) this.cameras.main.ignore(this.hint);
     if (this.controlsHint) this.cameras.main.ignore(this.controlsHint);
+    if (this.controlsHintSquiggle) this.cameras.main.ignore(this.controlsHintSquiggle);
     if (this.controlsOverlayBg) this.cameras.main.ignore(this.controlsOverlayBg);
     if (this.controlsOverlayText) this.cameras.main.ignore(this.controlsOverlayText);
     if (this.mapOverlayBg) this.cameras.main.ignore(this.mapOverlayBg);
     if (this.mapImage) this.cameras.main.ignore(this.mapImage);
     if (this.mapDot) this.cameras.main.ignore(this.mapDot);
-    if (this.choiceBg) this.cameras.main.ignore(this.choiceBg);
     if (this.choiceArrow) this.cameras.main.ignore(this.choiceArrow);
+    if (this.choiceHighlight) this.cameras.main.ignore(this.choiceHighlight);
 
     const worldObjects: Phaser.GameObjects.GameObject[] = [];
     if (this.groundLayer) worldObjects.push(this.groundLayer);
@@ -1313,11 +1396,9 @@ export class WorldScene extends Phaser.Scene {
       this.uiCamera.setSize(this.scale.width, this.scale.height);
     }
     if (this.hint) {
-      this.hint.setPosition(this.scale.width / 2, this.scale.height - 14);
+      this.hint.setPosition(this.scale.width / 2, this.scale.height - 24);
     }
-    if (this.controlsHint) {
-      this.controlsHint.setPosition(this.scale.width - 12, this.scale.height - 12);
-    }
+    this.positionControlsPrompt();
     if (this.controlsOverlayBg) {
       this.controlsOverlayBg.setSize(this.scale.width, this.scale.height);
     }
@@ -1335,7 +1416,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.choiceLabels.length > 0) {
       // Simplest correct fix: rebuild at the freshly computed layout rather
       // than patching each text's position by hand.
-      this.showChoiceOptions(this.choiceLabels);
+      this.showChoiceOptions(this.choiceLabels, true);
     }
   }
 
@@ -1472,9 +1553,24 @@ export class WorldScene extends Phaser.Scene {
     this.marker.y = this.markerBaseY + Math.sin(this.time.now / 180) * 2;
   }
 
+  // Opens the eye when something comes into reach and plays the opening
+  // frames backwards to close it when you walk away (or open a dialogue).
   private setHintVisible(visible: boolean): void {
     if (!this.hint) return;
-    this.hint.setVisible(visible);
+    if (visible) {
+      if (this.hintState === 'hidden') {
+        this.hintState = 'opening';
+        this.hintFrame = 0;
+        this.hint.setFrame(0).setVisible(true);
+      } else if (this.hintState === 'closing') {
+        this.hintState = 'opening'; // re-open from wherever it got to
+      }
+    } else if (this.hintState === 'opening' || this.hintState === 'open') {
+      this.hintState = 'closing';
+      // From the open loop, step back onto the last half-open frame.
+      this.hintFrame = Math.min(this.hintFrame, EYE.opening - 1);
+      this.hint.setFrame(this.hintFrame);
+    }
   }
 
   private handleInteractKeys(nearest: Interactable | null): void {
@@ -1526,26 +1622,87 @@ export class WorldScene extends Phaser.Scene {
     this.player.anims.play(`idle-${this.facing}`, true);
   }
 
+  private readonly controlsPromptText = "damn, I'd like to move, maybe i should press c";
+  private static readonly PROMPT_SIZE = 20;
+  private static readonly PROMPT_CHAR_MS = 40;
+
   private createControlsHint(): void {
-    // Bottom-right pulsing hint, styled after BootScene's "PRESS START" prompt
-    // but reversed to white with a soft glow so it reads against the outdoors.
-    const text = this.add
-      .text(this.scale.width - 12, this.scale.height - 12, 'PRESS C FOR CONTROLS', {
-        fontFamily: 'monospace',
-        fontSize: '10px',
-        color: '#ffffff',
-      })
-      .setOrigin(1, 1)
+    // Bottom-middle line in Josh's handwriting; his squiggle is the period.
+    // Laid out in full now, revealed a character at a time once the intro
+    // reveal ends (startControlsPrompt).
+    const text = new HandText(this, 0, 0, this.controlsPromptText, {
+      size: WorldScene.PROMPT_SIZE,
+      color: '#000000',
+    })
+      .setOrigin(0.5, 1)
       .setDepth(20)
-      .setShadow(0, 0, '#ffffff', 4, true, true);
-    this.tweens.add({
-      targets: text,
-      alpha: 0.3,
-      duration: 800,
-      yoyo: true,
-      repeat: -1,
-    });
+      .setVisibleCount(0)
+      .setVisible(false);
+    text.postFX?.addGlow(0xffffff, 3, 0, false, 0.1, 10);
     this.controlsHint = text;
+
+    const squiggle = this.add
+      .sprite(0, 0, SQUIGGLE.key, 0)
+      .setOrigin(0, 1)
+      .setScale(0.5)
+      .setDepth(20)
+      .setVisible(false);
+    squiggle.postFX?.addGlow(0xffffff, 3, 0, false, 0.1, 10);
+    this.controlsHintSquiggle = squiggle;
+    this.positionControlsPrompt();
+  }
+
+  private positionControlsPrompt(): void {
+    const text = this.controlsHint;
+    if (!text) return;
+    text.setPosition(this.scale.width / 2, this.scale.height - 36);
+    // The squiggle sits on the baseline right after the last letter, like a period.
+    const size = WorldScene.PROMPT_SIZE;
+    const top = text.y - text.height;
+    this.controlsHintSquiggle?.setPosition(text.x + text.width / 2 + 3, top + size * 1.25 + 3);
+  }
+
+  private startControlsPrompt(): void {
+    if (!this.awaitingFirstControls || !this.controlsHint) return;
+    this.controlsHint.setVisible(true).setAlpha(1);
+    this.controlsHintSquiggle?.setFrame(0).setVisible(true);
+    if (this.cache.audio.exists(DIALOGUE_SFX_KEY)) {
+      this.promptSfx = this.sound.add(DIALOGUE_SFX_KEY, { volume: 0.35 });
+    }
+    const total = this.controlsPromptText.length;
+    this.controlsHintTyped = 0;
+    this.controlsHintTimer = this.time.addEvent({
+      delay: WorldScene.PROMPT_CHAR_MS,
+      repeat: total - 1,
+      callback: () => {
+        this.controlsHintTyped += 1;
+        this.controlsHint?.setVisibleCount(this.controlsHintTyped);
+        // Squiggle draws itself in as the line types, like the dialogue box's.
+        const grow = Math.min(SQUIGGLE.growth - 1, Math.floor((this.controlsHintTyped / total) * SQUIGGLE.growth));
+        this.controlsHintSquiggle?.setFrame(grow);
+        if (this.promptSfx) {
+          this.promptSfx.stop();
+          this.promptSfx.play({ rate: Phaser.Math.FloatBetween(0.9, 1.1) });
+        }
+      },
+    });
+  }
+
+  private dismissControlsPrompt(): void {
+    this.awaitingFirstControls = false;
+    this.controlsHintTimer?.remove(false);
+    this.promptSfx?.destroy();
+    const parts = [this.controlsHint, this.controlsHintSquiggle].filter(
+      (p): p is NonNullable<typeof p> => p !== undefined
+    );
+    this.tweens.add({
+      targets: parts,
+      alpha: 0,
+      duration: 250,
+      onComplete: () => parts.forEach((p) => p.destroy()),
+    });
+    this.controlsHint = undefined;
+    this.controlsHintSquiggle = undefined;
   }
 
   private createControlsOverlay(): void {
@@ -1564,14 +1721,12 @@ export class WorldScene extends Phaser.Scene {
       'E OR SPACE  —  CONFIRM\n' +
       'M     —  MAP\n\n' +
       'PRESS C OR ESC TO CLOSE';
-    const text = this.add
-      .text(cx, cy, body, {
-        fontFamily: 'monospace',
-        fontSize: '14px',
-        color: '#ffffff',
-        align: 'center',
-        lineSpacing: 6,
-      })
+    const text = new HandText(this, cx, cy, body, {
+      size: 18,
+      color: '#ffffff',
+      align: 'center',
+      lineSpacing: 4,
+    })
       .setOrigin(0.5, 0.5)
       .setDepth(31)
       .setVisible(false);
@@ -1584,7 +1739,6 @@ export class WorldScene extends Phaser.Scene {
     this.controlsOpen = true;
     this.controlsOverlayBg?.setVisible(true);
     this.controlsOverlayText?.setVisible(true);
-    this.controlsHint?.setVisible(false);
   }
 
   private closeControls(): void {
@@ -1592,7 +1746,6 @@ export class WorldScene extends Phaser.Scene {
     this.controlsOpen = false;
     this.controlsOverlayBg?.setVisible(false);
     this.controlsOverlayText?.setVisible(false);
-    this.controlsHint?.setVisible(true);
   }
 
   private createMapOverlay(): void {
@@ -1659,7 +1812,6 @@ export class WorldScene extends Phaser.Scene {
     this.mapOverlayBg?.setVisible(true);
     this.mapImage?.setVisible(true);
     this.mapDot?.setVisible(true);
-    this.controlsHint?.setVisible(false);
   }
 
   private closeMap(): void {
@@ -1668,7 +1820,6 @@ export class WorldScene extends Phaser.Scene {
     this.mapOverlayBg?.setVisible(false);
     this.mapImage?.setVisible(false);
     this.mapDot?.setVisible(false);
-    this.controlsHint?.setVisible(true);
   }
 
   // Yes/No choice UI — pure Phaser, no DOM/CSS involved. Game.astro (the DOM
@@ -1730,45 +1881,21 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private createChoiceUI(): void {
-    // Black rectangle background, drawn with Graphics (not a Rectangle
-    // shape) per spec — filled black, bordered in the same cream used
-    // elsewhere in the dialogue UI.
-    const bg = this.add.graphics().setDepth(40).setVisible(false);
-    this.choiceBg = bg;
-
     const arrow = this.add
-      .text(0, 0, '▶', { fontFamily: 'monospace', fontSize: '12px', color: CHOICE_TEXT_COLOR })
+      .sprite(0, 0, ARROW_RIGHT.key, 0)
       .setOrigin(0, 0.5)
+      .setScale(18 / ARROW_RIGHT.frameHeight)
       .setDepth(42)
       .setVisible(false);
+    arrow.postFX?.addGlow(0xffffff, 3, 0, false, 0.1, 10);
     this.choiceArrow = arrow;
-  }
 
-  // Top-left corner of the choice box for a given row count — computed
-  // fresh each time (not cached) so it stays correct across resizes. Right
-  // edge approximates the DOM dialogue box's own right edge (which is
-  // centered, width min(880px, 100%), inset by its 16px layer padding) so
-  // the box reads as "above-right of the dialogue" without measuring the
-  // DOM directly.
-  private getChoiceBoxTopLeft(rowCount: number): { x: number; y: number } {
-    const dialogueWidth = Math.min(880, this.scale.width);
-    const boxRight = (this.scale.width + dialogueWidth) / 2 - CHOICE_BOX_MARGIN_RIGHT;
-    const boxBottom = this.scale.height - CHOICE_BOX_MARGIN_BOTTOM;
-    const boxHeight = CHOICE_BOX_PADDING * 2 + CHOICE_ROW_HEIGHT * rowCount;
-    return { x: boxRight - CHOICE_BOX_WIDTH, y: boxBottom - boxHeight };
-  }
-
-  private redrawChoiceBg(): void {
-    if (!this.choiceBg || this.choiceLabels.length === 0) return;
-    const rowCount = this.choiceLabels.length;
-    const { x, y } = this.getChoiceBoxTopLeft(rowCount);
-    const height = CHOICE_BOX_PADDING * 2 + CHOICE_ROW_HEIGHT * rowCount;
-
-    this.choiceBg.clear();
-    this.choiceBg.fillStyle(CHOICE_BG_COLOR, 1);
-    this.choiceBg.fillRect(x, y, CHOICE_BOX_WIDTH, height);
-    this.choiceBg.lineStyle(CHOICE_BORDER_WIDTH, CHOICE_BORDER_COLOR, 1);
-    this.choiceBg.strokeRect(x, y, CHOICE_BOX_WIDTH, height);
+    // Lavender sprig behind the selected option; stretched to its width.
+    this.choiceHighlight = this.add
+      .sprite(0, 0, SELECT.key, 0)
+      .setOrigin(0, 0.5)
+      .setDepth(40)
+      .setVisible(false);
   }
 
   private clearChoiceTexts(): void {
@@ -1776,32 +1903,40 @@ export class WorldScene extends Phaser.Scene {
     this.choiceTexts = [];
   }
 
-  private showChoiceOptions(labels: string[]): void {
+  private showChoiceOptions(labels: string[], keepSelection = false): void {
     this.clearChoiceTexts();
     this.choiceLabels = labels;
-    this.selectedChoiceIndex = 0;
+    if (!keepSelection) this.selectedChoiceIndex = 0; // first option is the default
 
-    const { x, y } = this.getChoiceBoxTopLeft(labels.length);
-    this.choiceTexts = labels.map((label, i) => {
-      const text = this.add
-        .text(x + CHOICE_TEXT_START_X, y + CHOICE_BOX_PADDING + i * CHOICE_ROW_HEIGHT, label, {
-          fontFamily: 'monospace',
-          fontSize: '14px',
-          color: CHOICE_TEXT_COLOR,
-        })
+    // Every option keeps the same size; on a narrow screen a long one wraps
+    // onto a second line instead of shrinking.
+    const maxTextWidth = Math.max(
+      120,
+      this.scale.width - CHOICE_MARGIN_RIGHT * 2 - CHOICE_TEXT_START_X
+    );
+    let y = CHOICE_MARGIN_TOP;
+    this.choiceTexts = labels.map((label) => {
+      const text = new HandText(this, 0, y, label, {
+        size: CHOICE_FONT_SIZE,
+        color: CHOICE_TEXT_COLOR,
+        wrapWidth: maxTextWidth,
+      })
         .setOrigin(0, 0)
         .setDepth(41);
-      // Keep longer choices inside the box without overlapping the selector.
-      const availableWidth = CHOICE_BOX_WIDTH - CHOICE_TEXT_START_X - CHOICE_BOX_PADDING;
-      if (text.width > availableWidth) text.setFontSize(Math.floor(14 * availableWidth / text.width));
+      text.postFX?.addGlow(0xffffff, 3, 0, false, 0.1, 10);
+      y += text.height + CHOICE_ROW_GAP;
       // Dynamic per-render objects — each needs its own ignore registration,
-      // unlike the static choiceBg/choiceArrow handled once in setupUICamera().
+      // unlike the static arrow/highlight handled once in setupUICamera().
       this.cameras.main.ignore(text);
       return text;
     });
 
-    this.redrawChoiceBg();
-    this.choiceBg?.setVisible(true);
+    // One left-aligned column whose right edge sits at the screen's right
+    // margin, so the arrows line up.
+    const columnWidth = CHOICE_TEXT_START_X + Math.max(...this.choiceTexts.map((t) => t.width));
+    this.choiceColumnX = this.scale.width - CHOICE_MARGIN_RIGHT - columnWidth;
+    for (const t of this.choiceTexts) t.x = this.choiceColumnX + CHOICE_TEXT_START_X;
+
     this.choiceArrow?.setVisible(true);
     this.repositionChoiceArrow();
   }
@@ -1809,16 +1944,44 @@ export class WorldScene extends Phaser.Scene {
   private hideChoiceOptions(): void {
     this.clearChoiceTexts();
     this.choiceLabels = [];
-    this.choiceBg?.clear().setVisible(false);
     this.choiceArrow?.setVisible(false);
+    this.choiceHighlightTimer?.remove(false);
+    this.choiceHighlight?.setVisible(false);
   }
 
   private repositionChoiceArrow(): void {
     if (!this.choiceArrow) return;
     const target = this.choiceTexts[this.selectedChoiceIndex];
     if (!target) return;
-    const { x } = this.getChoiceBoxTopLeft(this.choiceLabels.length);
-    this.choiceArrow.setPosition(x + CHOICE_BOX_PADDING, target.y + target.height / 2);
+    const centerY = target.y + target.height / 2;
+    this.choiceArrow.setPosition(this.choiceColumnX, centerY);
+    this.growChoiceHighlight(target, centerY);
+  }
+
+  // Quickly grow the lavender sprig in behind the newly selected option.
+  private growChoiceHighlight(target: HandText, centerY: number): void {
+    const sprig = this.choiceHighlight;
+    if (!sprig) return;
+    this.choiceHighlightTimer?.remove(false);
+    const x = target.x - CHOICE_HIGHLIGHT_PAD_X;
+    const scaleY = (target.height + CHOICE_HIGHLIGHT_PAD_Y * 2) / SELECT.frameHeight;
+    // Short words ("Yes") still get a sprig-shaped highlight: at least 70% of
+    // its drawn proportions, trailing past the word, but never off-screen.
+    const minWidth = SELECT.frameWidth * scaleY * 0.7;
+    const width = Math.min(
+      Math.max(target.width + CHOICE_HIGHLIGHT_PAD_X * 2, minWidth),
+      this.scale.width - x - 8
+    );
+    sprig
+      .setPosition(x, centerY)
+      .setScale(width / SELECT.frameWidth, scaleY)
+      .setFrame(0)
+      .setVisible(true);
+    this.choiceHighlightTimer = this.time.addEvent({
+      delay: SELECT.frameMs,
+      repeat: SELECT.frames - 2,
+      callback: () => sprig.setFrame(Math.min(SELECT.frames - 1, Number(sprig.frame.name) + 1)),
+    });
   }
 
   // Stop-then-play (rather than letting overlapping presses stack) so rapid

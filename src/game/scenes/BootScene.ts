@@ -1,4 +1,6 @@
 import Phaser from 'phaser';
+import { HandText } from '../handtext';
+import { ARROW_RIGHT, EYE, MARKER_DOWN, SELECT, SQUIGGLE } from '../ui-art';
 
 const MAP_KEY = 'map';
 const PLAYER_SHEET_KEY = 'player';
@@ -57,8 +59,16 @@ const TILESET_TEXTURE_KEYS = {
   miditem: 'tiles-miditem',
   smallitems: 'tiles-smallitems',
 } as const;
-const BAR_WIDTH = 160;
-const BAR_HEIGHT = 8;
+// Loading screen: Josh's 25 hand-painted flower frames grow with the load
+// percentage (frame = ceil(pct / 4)), with a hand-drawn counter in the middle.
+// Real loading is near-instant, so the shown percentage chases the real one
+// at most 1% per tick — the bloom always plays out (~2.5s) instead of flashing.
+export const BLOOM_FRAME_COUNT = 25;
+export const bloomKey = (frame: number) => `bloom-${frame}`;
+const BLOOM_TICK_MS = 25;
+const BLOOM_HOLD_MS = 350; // pause on the full bloom before the title appears
+const BLOOM_FIT = 1; // painting fills the screen (fit inside, landscape)
+const COUNTER_SIZE = 26; // cap height of the % counter, px
 
 // Spritesheet is 4 cols × 3 rows physically, but frames flow sequentially
 // in row-major order: 12 frames grouped as 4 direction-triplets of 3 frames.
@@ -78,9 +88,15 @@ const WALK_B_OFFSET = 2;
 const WALK_FRAME_RATE = 8;
 
 export class BootScene extends Phaser.Scene {
-  private barFill?: Phaser.GameObjects.Rectangle;
-  private titleText?: Phaser.GameObjects.Text;
-  private promptText?: Phaser.GameObjects.Text;
+  private bloom?: Phaser.GameObjects.Image;
+  private counter?: HandText;
+  private shownPct = 0;
+  private targetPct = 1;
+  private loadDone = false;
+  private titleShown = false;
+  private bloomElapsed = 0;
+  private titleText?: HandText;
+  private promptText?: HandText;
 
   constructor() {
     super({ key: 'Boot' });
@@ -90,24 +106,22 @@ export class BootScene extends Phaser.Scene {
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
 
-    const frame = this.add.rectangle(cx, cy + 12, BAR_WIDTH + 4, BAR_HEIGHT + 4);
-    frame.setStrokeStyle(1, 0x111111);
+    this.shownPct = 0;
+    this.targetPct = 1;
+    this.loadDone = false;
+    this.titleShown = false;
 
-    this.barFill = this.add
-      .rectangle(cx - BAR_WIDTH / 2, cy + 12 - BAR_HEIGHT / 2, 0, BAR_HEIGHT, 0x111111)
-      .setOrigin(0, 0);
-
-    this.add
-      .text(cx, cy - 16, 'LOADING', {
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        color: '#111111',
-      })
-      .setOrigin(0.5);
+    this.bloom = this.add.image(cx, cy, bloomKey(1)).setVisible(false);
+    this.fitBloom();
+    this.counter = new HandText(this, cx, cy, '', { size: COUNTER_SIZE, color: '#111111' }).setOrigin(0.5);
 
     this.load.on('progress', (value: number) => {
-      if (this.barFill) this.barFill.width = BAR_WIDTH * value;
+      this.targetPct = Math.max(this.targetPct, Math.round(value * 100));
     });
+    // Scene timers don't run until preload finishes, so drive the counter from
+    // the game loop instead — it keeps climbing on a slow connection too.
+    this.bloomElapsed = 0;
+    this.game.events.on(Phaser.Core.Events.STEP, this.stepBloom, this);
 
     this.load.spritesheet(PLAYER_SHEET_KEY, '/assets/s-sheet.png', {
       frameWidth: 32,
@@ -143,6 +157,14 @@ export class BootScene extends Phaser.Scene {
       frameHeight: 32,
     });
     this.load.image(TILESET_TEXTURE_KEYS.smallitems, '/assets/tiles/smollitems.png');
+
+    // Hand-drawn UI: choice arrow, NPC marker, look eye, choice highlight.
+    for (const sheet of [ARROW_RIGHT, MARKER_DOWN, EYE, SELECT, SQUIGGLE]) {
+      this.load.spritesheet(sheet.key, sheet.url, {
+        frameWidth: sheet.frameWidth,
+        frameHeight: sheet.frameHeight,
+      });
+    }
   }
 
   create(): void {
@@ -156,27 +178,68 @@ export class BootScene extends Phaser.Scene {
     for (const key of Object.values(TILESET_TEXTURE_KEYS)) {
       this.textures.get(key).setFilter(Phaser.Textures.FilterMode.NEAREST);
     }
+    // The hand-drawn UI is painted, not pixel art: scale it smoothly.
+    const painted: string[] = [ARROW_RIGHT.key, MARKER_DOWN.key, EYE.key, SELECT.key, SQUIGGLE.key];
+    for (const key of painted) {
+      this.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    }
 
-    this.children.removeAll();
+    // Everything is loaded; let the counter finish climbing, then show the
+    // title over the fully grown garden.
+    this.loadDone = true;
+    this.targetPct = 100;
 
+    this.scale.on('resize', this.handleResize, this);
+    this.events.once('shutdown', () => {
+      this.scale.off('resize', this.handleResize, this);
+      this.game.events.off(Phaser.Core.Events.STEP, this.stepBloom, this);
+    });
+  }
+
+  private stepBloom(_time: number, delta: number): void {
+    this.bloomElapsed += delta;
+    while (this.bloomElapsed >= BLOOM_TICK_MS) {
+      this.bloomElapsed -= BLOOM_TICK_MS;
+      this.tickBloom();
+    }
+  }
+
+  private tickBloom(): void {
+    if (this.shownPct < this.targetPct) {
+      this.shownPct += 1;
+      this.bloom?.setTexture(bloomKey(Math.min(BLOOM_FRAME_COUNT, Math.ceil(this.shownPct / 4))));
+      this.bloom?.setVisible(true);
+      this.fitBloom();
+      this.counter?.setText(`${this.shownPct}%`).setOrigin(0.5);
+    } else if (this.shownPct >= 100 && this.loadDone && !this.titleShown) {
+      this.titleShown = true;
+      this.game.events.off(Phaser.Core.Events.STEP, this.stepBloom, this);
+      this.time.delayedCall(BLOOM_HOLD_MS, () => this.showTitle());
+    }
+  }
+
+  private fitBloom(): void {
+    if (!this.bloom) return;
+    const frame = this.bloom.frame;
+    const scale = Math.min(this.scale.width / frame.width, this.scale.height / frame.height) * BLOOM_FIT;
+    this.bloom.setScale(scale).setPosition(this.scale.width / 2, this.scale.height / 2);
+  }
+
+  private showTitle(): void {
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
+    this.counter?.destroy();
+    this.counter = undefined;
 
-    this.titleText = this.add
-      .text(cx, cy - 16, 'PORTFOLIO', {
-        fontFamily: 'monospace',
-        fontSize: '16px',
-        color: '#111111',
-      })
-      .setOrigin(0.5);
+    this.titleText = new HandText(this, cx, cy - 16, 'PORTFOLIO', {
+      size: 20,
+      color: '#111111',
+    }).setOrigin(0.5);
 
-    this.promptText = this.add
-      .text(cx, cy + 16, 'PRESS START', {
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        color: '#111111',
-      })
-      .setOrigin(0.5);
+    this.promptText = new HandText(this, cx, cy + 18, 'PRESS START', {
+      size: 15,
+      color: '#111111',
+    }).setOrigin(0.5);
 
     this.tweens.add({
       targets: this.promptText,
@@ -184,11 +247,6 @@ export class BootScene extends Phaser.Scene {
       duration: 600,
       yoyo: true,
       repeat: -1,
-    });
-
-    this.scale.on('resize', this.handleResize, this);
-    this.events.once('shutdown', () => {
-      this.scale.off('resize', this.handleResize, this);
     });
 
     const start = () => this.scene.start('Intro');
@@ -200,8 +258,10 @@ export class BootScene extends Phaser.Scene {
   private handleResize(): void {
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
+    this.fitBloom();
+    this.counter?.setPosition(cx, cy);
     this.titleText?.setPosition(cx, cy - 16);
-    this.promptText?.setPosition(cx, cy + 16);
+    this.promptText?.setPosition(cx, cy + 18);
   }
 
   private registerNpcAnimations(): void {
