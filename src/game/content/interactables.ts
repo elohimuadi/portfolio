@@ -101,11 +101,27 @@ export const INTERACTABLE_CONTENT: Record<string, InteractableContent> = {
           },
           {
             label: 'Hakari',
-            followUpBody: `well I cant tell you about dat just yet son.`,
+            followUpBody: `hakari? man that trading bot that you tried to build to predict the market? man you did all that fractional kelly and toxicity flow just to get no edge man. But I know you working on it, until you give up it aint over. Wanna go to it now?`,
+            followUpChoices: [
+              { label: 'Yes', href: 'https://github.com/elohimuadi/hakari' },
+              {
+                label: 'No',
+                followUpBody: `figures, ill be here when you find that edge`,
+                reaction: 'annoyed',
+              },
+            ],
           },
           {
             label: 'Sidequest',
-            followUpBody: `well I cant tell you about dat just yet son.`,
+            followUpBody: `wanna know about that sidequest app huh. seems like when you looking to stop scrolling on that damn phone, you answer a few questions and get something to do given to you, then you look through what your friends up to, all touching some grass of course, not that you do that or anything. Wanna get back to it?`,
+            followUpChoices: [
+              { label: 'Yes', followUpBody: `aint out yet son, go finish it first` },
+              {
+                label: 'No',
+                followUpBody: `aight, stay on your phone then`,
+                reaction: 'annoyed',
+              },
+            ],
           },
         ],
       },
