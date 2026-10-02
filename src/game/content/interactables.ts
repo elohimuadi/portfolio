@@ -103,7 +103,7 @@ export const INTERACTABLE_CONTENT: Record<string, InteractableContent> = {
             label: 'Hakari',
             followUpBody: `hakari? man that trading bot that you tried to build to predict the market? man you did all that fractional kelly and toxicity flow just to get no edge man. But I know you working on it, until you give up it aint over. Wanna go to it now?`,
             followUpChoices: [
-              { label: 'Yes', href: 'https://github.com/elohimuadi/hakari' },
+              { label: 'Yes', followUpBody: `its locked up for now, come back when you find that edge` },
               {
                 label: 'No',
                 followUpBody: `figures, ill be here when you find that edge`,
