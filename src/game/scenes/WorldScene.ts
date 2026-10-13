@@ -46,9 +46,11 @@ import {
 import { isTouchDevice } from '../device';
 import {
   TOUCH_DEAD_ZONE_PX,
+  TOUCH_HYSTERESIS_PX,
   TOUCH_TARGET_PADDING_PX,
-  directionFromTouch,
+  indexOfRectAt,
   isWithinPaddedRect,
+  steadyDirection,
   type Direction,
 } from '../input/touch';
 
@@ -512,6 +514,12 @@ export class WorldScene extends Phaser.Scene {
   // that started in free roam, so the tap that closes a dialogue or the map
   // never turns into a walk.
   private movePointer: Phaser.Input.Pointer | null = null;
+  // Direction the steering finger gave last frame, so a hold near a diagonal
+  // keeps its heading instead of flipping (see steadyDirection).
+  private touchHeading: Direction | null = null;
+  // Choice the finger went down on. It is confirmed on release, not on press:
+  // browsers only let a tap open a link (window.open) from the release.
+  private pressedChoiceIndex: number | null = null;
   // The talk prompt is written once per page load, the first time something
   // comes into reach on a touch device.
   private talkPromptShown = false;
@@ -988,7 +996,7 @@ export class WorldScene extends Phaser.Scene {
 
     this.input.on('pointerdown', this.handlePointerDown, this);
     this.input.on('pointerup', this.handlePointerUp, this);
-    this.input.on('pointerupoutside', this.handlePointerUp, this);
+    this.input.on('pointerupoutside', this.handlePointerUpOutside, this);
   }
 
   // One entry point for every touch: the first matching branch wins, and only
@@ -999,7 +1007,13 @@ export class WorldScene extends Phaser.Scene {
     if (!this.introComplete) return;
 
     if (this.awaitingFirstControls) {
-      this.dismissControlsPrompt();
+      // An early tap finishes writing the line; the next one dismisses it,
+      // so an impatient thumb never throws away the only instruction.
+      if (this.controlsHintTyped < this.controlsPromptText.length) {
+        this.finishControlsPrompt();
+      } else {
+        this.dismissControlsPrompt();
+      }
       return;
     }
     if (this.controlsOpen) {
@@ -1011,7 +1025,7 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     if (interactionState.modalOpen) {
-      if (interactionState.choicesOpen) this.handleChoiceTap(pointer.x, pointer.y);
+      if (interactionState.choicesOpen) this.pressChoice(pointer.x, pointer.y);
       return;
     }
 
@@ -1031,6 +1045,12 @@ export class WorldScene extends Phaser.Scene {
 
   private handlePointerUp(pointer: Phaser.Input.Pointer): void {
     if (pointer === this.movePointer) this.movePointer = null;
+    if (pointer.wasTouch) this.releaseChoice(pointer.x, pointer.y);
+  }
+
+  private handlePointerUpOutside(pointer: Phaser.Input.Pointer): void {
+    if (pointer === this.movePointer) this.movePointer = null;
+    this.pressedChoiceIndex = null;
   }
 
   // Direction of the steering finger relative to the character's position on
@@ -1038,11 +1058,23 @@ export class WorldScene extends Phaser.Scene {
   // the character is often not at the screen centre.
   private touchDirection(): Direction | null {
     const pointer = this.movePointer;
-    if (!pointer || !pointer.isDown) return null;
+    if (!pointer || !pointer.isDown) {
+      this.touchHeading = null;
+      return null;
+    }
     const cam = this.cameras.main;
     const originX = (this.player.x - cam.worldView.x) * cam.zoom;
     const originY = (this.player.y - PLAYER_BODY_HEIGHT / 2 - cam.worldView.y) * cam.zoom;
-    return directionFromTouch(pointer.x, pointer.y, originX, originY, TOUCH_DEAD_ZONE_PX);
+    this.touchHeading = steadyDirection(
+      this.touchHeading,
+      pointer.x,
+      pointer.y,
+      originX,
+      originY,
+      TOUCH_DEAD_ZONE_PX,
+      TOUCH_HYSTERESIS_PX
+    );
+    return this.touchHeading;
   }
 
   private parseObjects(map: Phaser.Tilemaps.Tilemap): {
@@ -1841,6 +1873,13 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  // Skip the typewriter and show the whole line at once.
+  private finishControlsPrompt(): void {
+    this.controlsHintTimer?.remove(false);
+    this.controlsHintTyped = this.controlsPromptText.length;
+    this.controlsHint?.setVisibleCount(this.controlsHintTyped);
+  }
+
   private dismissControlsPrompt(): void {
     this.awaitingFirstControls = false;
     this.controlsHintTimer?.remove(false);
@@ -2233,24 +2272,40 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  // Choice texts live on the UI camera (zoom 1, no scroll), so screen
-  // coordinates are already their coordinates. Origin is top-left.
-  private handleChoiceTap(x: number, y: number): void {
-    const index = this.choiceTexts.findIndex((t) =>
-      isWithinPaddedRect(
-        x,
-        y,
-        { x: t.x, y: t.y, width: t.width, height: t.height },
-        CHOICE_TAP_PADDING_PX
-      )
-    );
-    if (index < 0) return;
+  // Which option a screen point is on, or -1. Choice texts live on the UI
+  // camera (zoom 1, no scroll), so screen coordinates are already theirs. Each
+  // row runs from the arrow column to the right edge of the screen, covering
+  // the arrow and the highlight as well as the words.
+  private choiceIndexAt(x: number, y: number): number {
+    const rows = this.choiceTexts.map((t) => ({
+      x: this.choiceColumnX,
+      y: t.y,
+      width: this.scale.width - this.choiceColumnX,
+      height: t.height,
+    }));
+    return indexOfRectAt(x, y, rows, CHOICE_TAP_PADDING_PX);
+  }
+
+  // Finger down on an option: highlight it straight away for feedback.
+  private pressChoice(x: number, y: number): void {
+    const index = this.choiceIndexAt(x, y);
+    this.pressedChoiceIndex = index < 0 ? null : index;
+    if (index < 0 || index === this.selectedChoiceIndex) return;
     this.selectedChoiceIndex = index;
     this.repositionChoiceArrow();
     this.playSelectSfx();
+  }
+
+  // Finger up: confirm only if it is still on the option it went down on, so
+  // sliding away cancels.
+  private releaseChoice(x: number, y: number): void {
+    const pressed = this.pressedChoiceIndex;
+    this.pressedChoiceIndex = null;
+    if (pressed === null || !interactionState.choicesOpen) return;
+    if (this.choiceIndexAt(x, y) !== pressed) return;
     window.dispatchEvent(
       new CustomEvent<ChoiceConfirmedDetail>(EVT_CHOICE_CONFIRMED, {
-        detail: { index },
+        detail: { index: pressed },
       })
     );
   }

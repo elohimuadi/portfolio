@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { directionFromTouch, isWithinPaddedRect } from './touch';
+import {
+  directionFromTouch,
+  indexOfRectAt,
+  isWithinPaddedRect,
+  steadyDirection,
+  type Direction,
+} from './touch';
 
 const DEAD_ZONE = 12;
 
@@ -44,6 +50,66 @@ describe('directionFromTouch', () => {
   test('returns null when a coordinate is not a finite number', () => {
     expect(directionFromTouch(Number.NaN, 200, 200, 200, DEAD_ZONE)).toBeNull();
     expect(directionFromTouch(200, 200, Number.POSITIVE_INFINITY, 200, DEAD_ZONE)).toBeNull();
+  });
+});
+
+describe('steadyDirection', () => {
+  const HYSTERESIS = 10;
+  const steady = (previous: Direction | null, dx: number, dy: number) =>
+    steadyDirection(previous, 200 + dx, 200 + dy, 200, 200, DEAD_ZONE, HYSTERESIS);
+
+  test('picks the wedge like directionFromTouch when nothing is held yet', () => {
+    expect(steady(null, 100, 0)).toBe('right');
+    expect(steady(null, 0, -100)).toBe('up');
+  });
+
+  test('does not start walking until the touch clears the dead zone by the hysteresis', () => {
+    expect(steady(null, 18, 0)).toBeNull();
+    expect(steady(null, 23, 0)).toBe('right');
+  });
+
+  test('keeps the current axis when the other axis leads by less than the hysteresis', () => {
+    expect(steady('right', 80, -85)).toBe('right');
+    expect(steady('up', 85, -80)).toBe('up');
+  });
+
+  test('switches axis once the other axis leads by more than the hysteresis', () => {
+    expect(steady('right', 80, -95)).toBe('up');
+    expect(steady('up', 95, -80)).toBe('right');
+  });
+
+  test('reverses within the same axis when the finger crosses the character', () => {
+    expect(steady('right', -50, 0)).toBe('left');
+    expect(steady('up', 0, 50)).toBe('down');
+  });
+
+  test('keeps walking until the touch is inside the dead zone', () => {
+    expect(steady('right', 15, 0)).toBe('right');
+    expect(steady('right', 10, 0)).toBeNull();
+  });
+
+  test('returns null when a coordinate is not a finite number', () => {
+    expect(steady('right', Number.NaN, 0)).toBeNull();
+  });
+});
+
+describe('indexOfRectAt', () => {
+  const rows = [
+    { x: 100, y: 20, width: 200, height: 30 },
+    { x: 100, y: 60, width: 200, height: 30 },
+  ];
+
+  test('returns the index of the rect containing the point', () => {
+    expect(indexOfRectAt(150, 70, rows, 0)).toBe(1);
+  });
+
+  test('returns -1 when no rect contains the point', () => {
+    expect(indexOfRectAt(50, 70, rows, 0)).toBe(-1);
+  });
+
+  test('counts the padding around each rect', () => {
+    expect(indexOfRectAt(150, 54, rows, 4)).toBe(0);
+    expect(indexOfRectAt(150, 56, rows, 4)).toBe(1);
   });
 });
 
