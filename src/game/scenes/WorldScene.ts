@@ -44,7 +44,13 @@ import {
   SHOYA_IDLE_KEY,
 } from './BootScene';
 import { isTouchDevice } from '../device';
-import { TOUCH_DEAD_ZONE_PX, directionFromTouch, type Direction } from '../input/touch';
+import {
+  TOUCH_DEAD_ZONE_PX,
+  TOUCH_TARGET_PADDING_PX,
+  directionFromTouch,
+  isWithinPaddedRect,
+  type Direction,
+} from '../input/touch';
 
 const PLAYER_SIZE = 32; // 32×32 sprite frame
 const PLAYER_BODY_WIDTH = 20; // slim horizontal footprint — walls feel like they end at the character's visible edges
@@ -80,6 +86,7 @@ const CHOICE_HIGHLIGHT_PAD_X = 16; // sprig extends this far past the text
 const CHOICE_HIGHLIGHT_PAD_Y = 14;
 const KEYBOARD_MOVE_PROMPT = "damn, I'd like to move, maybe i should press c";
 const TOUCH_MOVE_PROMPT = "damn, I'd like to move, maybe i should tap in the direction i wanna go";
+const TOUCH_TALK_PROMPT = 'maybe i should tap on them to talk';
 const PROMPT_SIDE_PADDING = 24; // keeps the bottom prompt off the screen edges
 const PROMPT_MIN_WRAP_WIDTH = 120;
 
@@ -496,6 +503,10 @@ export class WorldScene extends Phaser.Scene {
   // that started in free roam, so the tap that closes a dialogue or the map
   // never turns into a walk.
   private movePointer: Phaser.Input.Pointer | null = null;
+  // The talk prompt is written once per page load, the first time something
+  // comes into reach on a touch device.
+  private talkPromptShown = false;
+  private talkPromptActive = false;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: {
     up: Phaser.Input.Keyboard.Key;
@@ -972,6 +983,12 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     if (this.mapOpen || interactionState.modalOpen) return;
+
+    const nearest = this.findNearestInteractable();
+    if (nearest && this.isTouchOnInteractable(pointer, nearest)) {
+      this.interactWith(nearest);
+      return;
+    }
 
     this.movePointer = pointer;
   }
@@ -1548,7 +1565,9 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.setMarkerTarget(nearest);
-    this.setHintVisible(nearest !== null);
+    // The eye has an E drawn in it, so touch devices get a written line instead.
+    this.setHintVisible(nearest !== null && !this.isTouch);
+    if (this.isTouch) this.syncTalkPrompt(nearest !== null);
   }
 
   private getVisibleTop(sprite: Phaser.GameObjects.Sprite): number {
@@ -1580,12 +1599,7 @@ export class WorldScene extends Phaser.Scene {
     return sprite.y + (top - sprite.displayOriginY) * sprite.scaleY;
   }
 
-  private setMarkerTarget(nearest: Interactable | null): void {
-    if (!this.marker) return;
-    if (!nearest) {
-      this.marker.setVisible(false);
-      return;
-    }
+  private spriteFor(item: Interactable): Phaser.GameObjects.Sprite | undefined {
     const npcs: Record<string, Phaser.GameObjects.Sprite | undefined> = {
       gojocat: this.gojocat,
       pompompurin: this.pompompurin,
@@ -1597,7 +1611,16 @@ export class WorldScene extends Phaser.Scene {
       trashcan: this.trashcan,
       'no-face': this.noFace,
     };
-    const npc = nearest.sprite ?? npcs[nearest.id];
+    return item.sprite ?? npcs[item.id];
+  }
+
+  private setMarkerTarget(nearest: Interactable | null): void {
+    if (!this.marker) return;
+    if (!nearest) {
+      this.marker.setVisible(false);
+      return;
+    }
+    const npc = this.spriteFor(nearest);
     // Anchor to the current frame's visible pixels in scaled world space.
     // 10px clearance leaves room for the triangle's height and 2px bob.
     this.markerBaseY = npc ? this.getVisibleTop(npc) - 10 : nearest.centerY - 14;
@@ -1631,7 +1654,28 @@ export class WorldScene extends Phaser.Scene {
     const pressedE = Phaser.Input.Keyboard.JustDown(this.keyE);
     const pressedSpace = Phaser.Input.Keyboard.JustDown(this.keySpace);
     if (!pressedE && !pressedSpace) return;
+    this.interactWith(nearest);
+  }
 
+  // True when a touch lands on the interactable's sprite (or its tile, for
+  // ones with no sprite), with a little padding so small props are tappable.
+  private isTouchOnInteractable(pointer: Phaser.Input.Pointer, item: Interactable): boolean {
+    const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const sprite = this.spriteFor(item);
+    const rect = sprite
+      ? sprite.getBounds()
+      : {
+          x: item.centerX - TILE_SIZE / 2,
+          y: item.centerY - TILE_SIZE / 2,
+          width: TILE_SIZE,
+          height: TILE_SIZE,
+        };
+    return isWithinPaddedRect(world.x, world.y, rect, TOUCH_TARGET_PADDING_PX);
+  }
+
+  // Shared by the keyboard (E/Space) and a tap on the thing itself.
+  private interactWith(nearest: Interactable): void {
+    this.dismissTalkPrompt();
     this.faceInteractable(nearest);
     if (nearest.id === 'no-face') {
       // Repeated input must not restart an in-progress reaction.
@@ -1763,6 +1807,28 @@ export class WorldScene extends Phaser.Scene {
     });
     this.controlsHint = undefined;
     this.controlsHintSquiggle = undefined;
+  }
+
+  private syncTalkPrompt(inReach: boolean): void {
+    if (!inReach) {
+      this.dismissTalkPrompt();
+      return;
+    }
+    if (this.talkPromptShown || this.controlsHint) return;
+    this.talkPromptShown = true;
+    this.talkPromptActive = true;
+    this.controlsPromptText = TOUCH_TALK_PROMPT;
+    this.createControlsHint();
+    // Created after setupUICamera(), so register with the cameras by hand.
+    if (this.controlsHint) this.cameras.main.ignore(this.controlsHint);
+    if (this.controlsHintSquiggle) this.cameras.main.ignore(this.controlsHintSquiggle);
+    this.startControlsPrompt();
+  }
+
+  private dismissTalkPrompt(): void {
+    if (!this.talkPromptActive) return;
+    this.talkPromptActive = false;
+    this.dismissControlsPrompt();
   }
 
   private createControlsOverlay(): void {
