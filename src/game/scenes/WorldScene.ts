@@ -43,6 +43,8 @@ import {
   SELECT_SFX_KEY,
   SHOYA_IDLE_KEY,
 } from './BootScene';
+import { isTouchDevice } from '../device';
+import { TOUCH_DEAD_ZONE_PX, directionFromTouch, type Direction } from '../input/touch';
 
 const PLAYER_SIZE = 32; // 32×32 sprite frame
 const PLAYER_BODY_WIDTH = 20; // slim horizontal footprint — walls feel like they end at the character's visible edges
@@ -76,6 +78,10 @@ const CHOICE_TEXT_START_X = 32; // leaves room for the arrow
 const CHOICE_TEXT_COLOR = '#000000';
 const CHOICE_HIGHLIGHT_PAD_X = 16; // sprig extends this far past the text
 const CHOICE_HIGHLIGHT_PAD_Y = 14;
+const KEYBOARD_MOVE_PROMPT = "damn, I'd like to move, maybe i should press c";
+const TOUCH_MOVE_PROMPT = "damn, I'd like to move, maybe i should tap in the direction i wanna go";
+const PROMPT_SIDE_PADDING = 24; // keeps the bottom prompt off the screen edges
+const PROMPT_MIN_WRAP_WIDTH = 120;
 
 // Wind sway — foliage layers get a subtle intermittent horizontal swing.
 // Amplitudes stay in single-pixel territory so any player-vs-wall collision
@@ -484,6 +490,12 @@ type Facing = 'down' | 'left' | 'right' | 'up';
 export class WorldScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private facing: Facing = 'down';
+  // Wording and UI only; touch input is always listened for.
+  private readonly isTouch = isTouchDevice();
+  // The finger currently steering the character, if any. Set only by a touch
+  // that started in free roam, so the tap that closes a dialogue or the map
+  // never turns into a walk.
+  private movePointer: Phaser.Input.Pointer | null = null;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: {
     up: Phaser.Input.Keyboard.Key;
@@ -938,6 +950,46 @@ export class WorldScene extends Phaser.Scene {
     this.keyC = kb.addKey(Phaser.Input.Keyboard.KeyCodes.C);
     this.keyM = kb.addKey(Phaser.Input.Keyboard.KeyCodes.M);
     this.keyEsc = kb.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+
+    this.input.on('pointerdown', this.handlePointerDown, this);
+    this.input.on('pointerup', this.handlePointerUp, this);
+    this.input.on('pointerupoutside', this.handlePointerUp, this);
+  }
+
+  // One entry point for every touch: the first matching branch wins, and only
+  // a touch that falls through to the end starts steering the character.
+  private handlePointerDown(pointer: Phaser.Input.Pointer): void {
+    if (!pointer.wasTouch) return;
+    this.movePointer = null;
+    if (!this.introComplete) return;
+
+    if (this.awaitingFirstControls) {
+      this.dismissControlsPrompt();
+      return;
+    }
+    if (this.controlsOpen) {
+      this.closeControls();
+      return;
+    }
+    if (this.mapOpen || interactionState.modalOpen) return;
+
+    this.movePointer = pointer;
+  }
+
+  private handlePointerUp(pointer: Phaser.Input.Pointer): void {
+    if (pointer === this.movePointer) this.movePointer = null;
+  }
+
+  // Direction of the steering finger relative to the character's position on
+  // screen. The camera follows with an offset and clamps at the map edges, so
+  // the character is often not at the screen centre.
+  private touchDirection(): Direction | null {
+    const pointer = this.movePointer;
+    if (!pointer || !pointer.isDown) return null;
+    const cam = this.cameras.main;
+    const originX = (this.player.x - cam.worldView.x) * cam.zoom;
+    const originY = (this.player.y - PLAYER_BODY_HEIGHT / 2 - cam.worldView.y) * cam.zoom;
+    return directionFromTouch(pointer.x, pointer.y, originX, originY, TOUCH_DEAD_ZONE_PX);
   }
 
   private parseObjects(map: Phaser.Tilemaps.Tilemap): {
@@ -1422,10 +1474,11 @@ export class WorldScene extends Phaser.Scene {
 
   private handleMovement(): void {
     const body = this.player.body as Phaser.Physics.Arcade.Body;
-    const left = this.cursors.left?.isDown || this.wasd.left.isDown;
-    const right = this.cursors.right?.isDown || this.wasd.right.isDown;
-    const up = this.cursors.up?.isDown || this.wasd.up.isDown;
-    const down = this.cursors.down?.isDown || this.wasd.down.isDown;
+    const touch = this.touchDirection();
+    const left = this.cursors.left?.isDown || this.wasd.left.isDown || touch === 'left';
+    const right = this.cursors.right?.isDown || this.wasd.right.isDown || touch === 'right';
+    const up = this.cursors.up?.isDown || this.wasd.up.isDown || touch === 'up';
+    const down = this.cursors.down?.isDown || this.wasd.down.isDown || touch === 'down';
 
     let vx = 0;
     let vy = 0;
@@ -1622,7 +1675,7 @@ export class WorldScene extends Phaser.Scene {
     this.player.anims.play(`idle-${this.facing}`, true);
   }
 
-  private readonly controlsPromptText = "damn, I'd like to move, maybe i should press c";
+  private controlsPromptText = this.isTouch ? TOUCH_MOVE_PROMPT : KEYBOARD_MOVE_PROMPT;
   private static readonly PROMPT_SIZE = 20;
   private static readonly PROMPT_CHAR_MS = 40;
 
@@ -1633,6 +1686,7 @@ export class WorldScene extends Phaser.Scene {
     const text = new HandText(this, 0, 0, this.controlsPromptText, {
       size: WorldScene.PROMPT_SIZE,
       color: '#000000',
+      align: 'center',
     })
       .setOrigin(0.5, 1)
       .setDepth(20)
@@ -1655,15 +1709,21 @@ export class WorldScene extends Phaser.Scene {
   private positionControlsPrompt(): void {
     const text = this.controlsHint;
     if (!text) return;
+    text.setWordWrapWidth(
+      Math.max(PROMPT_MIN_WRAP_WIDTH, this.scale.width - PROMPT_SIDE_PADDING * 2)
+    );
     text.setPosition(this.scale.width / 2, this.scale.height - 36);
     // The squiggle sits on the baseline right after the last letter, like a period.
-    const size = WorldScene.PROMPT_SIZE;
+    const left = text.x - text.width / 2;
     const top = text.y - text.height;
-    this.controlsHintSquiggle?.setPosition(text.x + text.width / 2 + 3, top + size * 1.25 + 3);
+    this.controlsHintSquiggle?.setPosition(
+      left + text.lastLineRight + 3,
+      top + text.lastBaseline + 3
+    );
   }
 
   private startControlsPrompt(): void {
-    if (!this.awaitingFirstControls || !this.controlsHint) return;
+    if (!this.controlsHint) return;
     this.controlsHint.setVisible(true).setAlpha(1);
     this.controlsHintSquiggle?.setFrame(0).setVisible(true);
     if (this.cache.audio.exists(DIALOGUE_SFX_KEY)) {

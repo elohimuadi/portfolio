@@ -88,6 +88,9 @@ export class HandText extends Phaser.GameObjects.Container {
   private visibleCount = Infinity;
   // How far children are currently shifted to honour the origin.
   private originShift: [number, number] = [0, 0];
+  // Where the last line ends, relative to the block's top-left corner.
+  private lastLineRightPx = 0;
+  private lastBaselinePx = 0;
 
   constructor(scene: Phaser.Scene, x: number, y: number, text: string, style: HandTextStyle = {}) {
     super(scene, x, y);
@@ -201,6 +204,16 @@ export class HandText extends Phaser.GameObjects.Container {
     const blockH = lines.length * lineHeight - lineSpacing;
     const baselineOffset = size * 1.25; // first baseline below the block top
 
+    const lastLine = lines.length - 1;
+    const lastLineStart =
+      align === 'center'
+        ? (blockW - lineWidths[lastLine]) / 2
+        : align === 'right'
+          ? blockW - lineWidths[lastLine]
+          : 0;
+    this.lastLineRightPx = (padding.left ?? 0) + lastLineStart + lineWidths[lastLine];
+    this.lastBaselinePx = (padding.top ?? 0) + lastLine * lineHeight + baselineOffset;
+
     this.charUnits = new Array(this.content.length).fill(null);
     let glyphIndex = 0;
     lines.forEach((line, li) => {
@@ -291,6 +304,16 @@ export class HandText extends Phaser.GameObjects.Container {
 
   get text(): string {
     return this.content;
+  }
+
+  /** X of the end of the last line, from the block's left edge. */
+  get lastLineRight(): number {
+    return this.lastLineRightPx;
+  }
+
+  /** Y of the last line's baseline, from the block's top edge. */
+  get lastBaseline(): number {
+    return this.lastBaselinePx;
   }
 
   setWordWrapWidth(width: number): this {
