@@ -43,6 +43,16 @@ import {
   SELECT_SFX_KEY,
   SHOYA_IDLE_KEY,
 } from './BootScene';
+import { isTouchDevice } from '../device';
+import {
+  TOUCH_DEAD_ZONE_PX,
+  TOUCH_HYSTERESIS_PX,
+  TOUCH_TARGET_PADDING_PX,
+  indexOfRectAt,
+  isWithinPaddedRect,
+  steadyDirection,
+  type Direction,
+} from '../input/touch';
 
 const PLAYER_SIZE = 32; // 32×32 sprite frame
 const PLAYER_BODY_WIDTH = 20; // slim horizontal footprint — walls feel like they end at the character's visible edges
@@ -60,6 +70,13 @@ const MAP_OVERLAY_WIDTH_RATIO = 0.8;
 const MAP_OVERLAY_HEIGHT_RATIO = 0.8;
 const MAP_DOT_RADIUS = 3;
 const MAP_DOT_COLOR = 0x8a7a94; // desaturated purple
+const MAP_LABEL_TEXT = 'MAP';
+const MAP_LABEL_SIZE = 18;
+const MAP_LABEL_MARGIN = 16; // from the top-left corner of the screen
+const MAP_LABEL_TAP_PADDING_PX = 12;
+const MAP_CLOSE_TEXT = 'tap anywhere to close';
+const MAP_CLOSE_TEXT_SIZE = 16;
+const MAP_CLOSE_TEXT_GAP = 12; // below the map image
 // Negative offset shifts the follow focus below the player, biasing the viewport
 // down so the player sits higher on screen (undoes visible top padding).
 const CAMERA_FOLLOW_OFFSET_Y = -40;
@@ -76,6 +93,13 @@ const CHOICE_TEXT_START_X = 32; // leaves room for the arrow
 const CHOICE_TEXT_COLOR = '#000000';
 const CHOICE_HIGHLIGHT_PAD_X = 16; // sprig extends this far past the text
 const CHOICE_HIGHLIGHT_PAD_Y = 14;
+// Half the row gap, so neighbouring options' tap areas meet but never overlap.
+const CHOICE_TAP_PADDING_PX = CHOICE_ROW_GAP / 2;
+const KEYBOARD_MOVE_PROMPT = "damn, I'd like to move, maybe i should press c";
+const TOUCH_MOVE_PROMPT = "damn, I'd like to move, maybe i should tap in the direction i wanna go";
+const TOUCH_TALK_PROMPT = 'maybe i should tap on them to talk';
+const PROMPT_SIDE_PADDING = 24; // keeps the bottom prompt off the screen edges
+const PROMPT_MIN_WRAP_WIDTH = 120;
 
 // Wind sway — foliage layers get a subtle intermittent horizontal swing.
 // Amplitudes stay in single-pixel territory so any player-vs-wall collision
@@ -484,6 +508,22 @@ type Facing = 'down' | 'left' | 'right' | 'up';
 export class WorldScene extends Phaser.Scene {
   private player!: Phaser.Physics.Arcade.Sprite;
   private facing: Facing = 'down';
+  // Wording and UI only; touch input is always listened for.
+  private readonly isTouch = isTouchDevice();
+  // The finger currently steering the character, if any. Set only by a touch
+  // that started in free roam, so the tap that closes a dialogue or the map
+  // never turns into a walk.
+  private movePointer: Phaser.Input.Pointer | null = null;
+  // Direction the steering finger gave last frame, so a hold near a diagonal
+  // keeps its heading instead of flipping (see steadyDirection).
+  private touchHeading: Direction | null = null;
+  // Choice the finger went down on. It is confirmed on release, not on press:
+  // browsers only let a tap open a link (window.open) from the release.
+  private pressedChoiceIndex: number | null = null;
+  // The talk prompt is written once per page load, the first time something
+  // comes into reach on a touch device.
+  private talkPromptShown = false;
+  private talkPromptActive = false;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: {
     up: Phaser.Input.Keyboard.Key;
@@ -517,6 +557,9 @@ export class WorldScene extends Phaser.Scene {
   private mapImage?: Phaser.GameObjects.Image;
   private mapDot?: Phaser.GameObjects.Arc;
   private mapOpen = false;
+  // Touch only: the corner label that opens the map, and the line under it.
+  private mapLabel?: HandText;
+  private mapCloseText?: HandText;
   private choiceArrow?: Phaser.GameObjects.Sprite;
   private choiceHighlight?: Phaser.GameObjects.Sprite;
   private choiceHighlightTimer?: Phaser.Time.TimerEvent;
@@ -818,6 +861,7 @@ export class WorldScene extends Phaser.Scene {
     if (!this.player?.body) return;
 
     this.updateDepthSort();
+    this.mapLabel?.setVisible(this.isFreeRoam());
 
     if (!this.introComplete) {
       // Freeze the world during the reveal. Player anim (idle-down) keeps
@@ -906,6 +950,17 @@ export class WorldScene extends Phaser.Scene {
     this.handleInteractKeys(nearest);
   }
 
+  // Walking around with nothing open: the only time the map label shows.
+  private isFreeRoam(): boolean {
+    return (
+      this.introComplete &&
+      !this.awaitingFirstControls &&
+      !this.controlsOpen &&
+      !this.mapOpen &&
+      !interactionState.modalOpen
+    );
+  }
+
   private updateDepthSort(): void {
     // Y-sort: whoever is lower on screen (larger y) renders in front, so the
     // player, NPCs, and props occlude each other correctly as they cross paths.
@@ -938,6 +993,88 @@ export class WorldScene extends Phaser.Scene {
     this.keyC = kb.addKey(Phaser.Input.Keyboard.KeyCodes.C);
     this.keyM = kb.addKey(Phaser.Input.Keyboard.KeyCodes.M);
     this.keyEsc = kb.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+
+    this.input.on('pointerdown', this.handlePointerDown, this);
+    this.input.on('pointerup', this.handlePointerUp, this);
+    this.input.on('pointerupoutside', this.handlePointerUpOutside, this);
+  }
+
+  // One entry point for every touch: the first matching branch wins, and only
+  // a touch that falls through to the end starts steering the character.
+  private handlePointerDown(pointer: Phaser.Input.Pointer): void {
+    if (!pointer.wasTouch) return;
+    this.movePointer = null;
+    if (!this.introComplete) return;
+
+    if (this.awaitingFirstControls) {
+      // An early tap finishes writing the line; the next one dismisses it,
+      // so an impatient thumb never throws away the only instruction.
+      if (this.controlsHintTyped < this.controlsPromptText.length) {
+        this.finishControlsPrompt();
+      } else {
+        this.dismissControlsPrompt();
+      }
+      return;
+    }
+    if (this.controlsOpen) {
+      this.closeControls();
+      return;
+    }
+    if (this.mapOpen) {
+      this.closeMap();
+      return;
+    }
+    if (interactionState.modalOpen) {
+      if (interactionState.choicesOpen) this.pressChoice(pointer.x, pointer.y);
+      return;
+    }
+
+    if (this.isTouchOnMapLabel(pointer)) {
+      this.openMap();
+      return;
+    }
+
+    const nearest = this.findNearestInteractable();
+    if (nearest && this.isTouchOnInteractable(pointer, nearest)) {
+      this.interactWith(nearest);
+      return;
+    }
+
+    this.movePointer = pointer;
+  }
+
+  private handlePointerUp(pointer: Phaser.Input.Pointer): void {
+    if (pointer === this.movePointer) this.movePointer = null;
+    if (pointer.wasTouch) this.releaseChoice(pointer.x, pointer.y);
+  }
+
+  private handlePointerUpOutside(pointer: Phaser.Input.Pointer): void {
+    if (pointer === this.movePointer) this.movePointer = null;
+    this.pressedChoiceIndex = null;
+  }
+
+  // Direction of the steering finger relative to the character's position on
+  // screen. The camera follows with an offset and clamps at the map edges, so
+  // the character is often not at the screen centre.
+  private touchDirection(): Direction | null {
+    const pointer = this.movePointer;
+    if (!pointer || !pointer.isDown) {
+      this.touchHeading = null;
+      return null;
+    }
+    const cam = this.cameras.main;
+    const originX = (this.player.x - cam.worldView.x) * cam.zoom;
+    const originY = (this.player.y - PLAYER_BODY_HEIGHT / 2 - cam.worldView.y) * cam.zoom;
+    this.touchHeading = steadyDirection(
+      this.touchHeading,
+      pointer.x,
+      pointer.y,
+      originX,
+      originY,
+      TOUCH_DEAD_ZONE_PX,
+      TOUCH_HYSTERESIS_PX
+    );
+    return this.touchHeading;
   }
 
   private parseObjects(map: Phaser.Tilemaps.Tilemap): {
@@ -1356,6 +1493,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.mapOverlayBg) this.cameras.main.ignore(this.mapOverlayBg);
     if (this.mapImage) this.cameras.main.ignore(this.mapImage);
     if (this.mapDot) this.cameras.main.ignore(this.mapDot);
+    if (this.mapLabel) this.cameras.main.ignore(this.mapLabel);
+    if (this.mapCloseText) this.cameras.main.ignore(this.mapCloseText);
     if (this.choiceArrow) this.cameras.main.ignore(this.choiceArrow);
     if (this.choiceHighlight) this.cameras.main.ignore(this.choiceHighlight);
 
@@ -1422,10 +1561,11 @@ export class WorldScene extends Phaser.Scene {
 
   private handleMovement(): void {
     const body = this.player.body as Phaser.Physics.Arcade.Body;
-    const left = this.cursors.left?.isDown || this.wasd.left.isDown;
-    const right = this.cursors.right?.isDown || this.wasd.right.isDown;
-    const up = this.cursors.up?.isDown || this.wasd.up.isDown;
-    const down = this.cursors.down?.isDown || this.wasd.down.isDown;
+    const touch = this.touchDirection();
+    const left = this.cursors.left?.isDown || this.wasd.left.isDown || touch === 'left';
+    const right = this.cursors.right?.isDown || this.wasd.right.isDown || touch === 'right';
+    const up = this.cursors.up?.isDown || this.wasd.up.isDown || touch === 'up';
+    const down = this.cursors.down?.isDown || this.wasd.down.isDown || touch === 'down';
 
     let vx = 0;
     let vy = 0;
@@ -1495,7 +1635,9 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.setMarkerTarget(nearest);
-    this.setHintVisible(nearest !== null);
+    // The eye has an E drawn in it, so touch devices get a written line instead.
+    this.setHintVisible(nearest !== null && !this.isTouch);
+    if (this.isTouch) this.syncTalkPrompt(nearest !== null);
   }
 
   private getVisibleTop(sprite: Phaser.GameObjects.Sprite): number {
@@ -1527,12 +1669,7 @@ export class WorldScene extends Phaser.Scene {
     return sprite.y + (top - sprite.displayOriginY) * sprite.scaleY;
   }
 
-  private setMarkerTarget(nearest: Interactable | null): void {
-    if (!this.marker) return;
-    if (!nearest) {
-      this.marker.setVisible(false);
-      return;
-    }
+  private spriteFor(item: Interactable): Phaser.GameObjects.Sprite | undefined {
     const npcs: Record<string, Phaser.GameObjects.Sprite | undefined> = {
       gojocat: this.gojocat,
       pompompurin: this.pompompurin,
@@ -1544,7 +1681,16 @@ export class WorldScene extends Phaser.Scene {
       trashcan: this.trashcan,
       'no-face': this.noFace,
     };
-    const npc = nearest.sprite ?? npcs[nearest.id];
+    return item.sprite ?? npcs[item.id];
+  }
+
+  private setMarkerTarget(nearest: Interactable | null): void {
+    if (!this.marker) return;
+    if (!nearest) {
+      this.marker.setVisible(false);
+      return;
+    }
+    const npc = this.spriteFor(nearest);
     // Anchor to the current frame's visible pixels in scaled world space.
     // 10px clearance leaves room for the triangle's height and 2px bob.
     this.markerBaseY = npc ? this.getVisibleTop(npc) - 10 : nearest.centerY - 14;
@@ -1578,7 +1724,39 @@ export class WorldScene extends Phaser.Scene {
     const pressedE = Phaser.Input.Keyboard.JustDown(this.keyE);
     const pressedSpace = Phaser.Input.Keyboard.JustDown(this.keySpace);
     if (!pressedE && !pressedSpace) return;
+    this.interactWith(nearest);
+  }
 
+  // True when a touch lands on the interactable's sprite (or its tile, for
+  // ones with no sprite), with a little padding so small props are tappable.
+  private isTouchOnInteractable(pointer: Phaser.Input.Pointer, item: Interactable): boolean {
+    const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    const sprite = this.spriteFor(item);
+    const rect = sprite
+      ? sprite.getBounds()
+      : {
+          x: item.centerX - TILE_SIZE / 2,
+          y: item.centerY - TILE_SIZE / 2,
+          width: TILE_SIZE,
+          height: TILE_SIZE,
+        };
+    return isWithinPaddedRect(world.x, world.y, rect, TOUCH_TARGET_PADDING_PX);
+  }
+
+  private isTouchOnMapLabel(pointer: Phaser.Input.Pointer): boolean {
+    const label = this.mapLabel;
+    if (!label || !label.visible) return false;
+    return isWithinPaddedRect(
+      pointer.x,
+      pointer.y,
+      { x: label.x, y: label.y, width: label.width, height: label.height },
+      MAP_LABEL_TAP_PADDING_PX
+    );
+  }
+
+  // Shared by the keyboard (E/Space) and a tap on the thing itself.
+  private interactWith(nearest: Interactable): void {
+    this.dismissTalkPrompt();
     this.faceInteractable(nearest);
     if (nearest.id === 'no-face') {
       // Repeated input must not restart an in-progress reaction.
@@ -1622,7 +1800,7 @@ export class WorldScene extends Phaser.Scene {
     this.player.anims.play(`idle-${this.facing}`, true);
   }
 
-  private readonly controlsPromptText = "damn, I'd like to move, maybe i should press c";
+  private controlsPromptText = this.isTouch ? TOUCH_MOVE_PROMPT : KEYBOARD_MOVE_PROMPT;
   private static readonly PROMPT_SIZE = 20;
   private static readonly PROMPT_CHAR_MS = 40;
 
@@ -1633,6 +1811,7 @@ export class WorldScene extends Phaser.Scene {
     const text = new HandText(this, 0, 0, this.controlsPromptText, {
       size: WorldScene.PROMPT_SIZE,
       color: '#000000',
+      align: 'center',
     })
       .setOrigin(0.5, 1)
       .setDepth(20)
@@ -1655,15 +1834,21 @@ export class WorldScene extends Phaser.Scene {
   private positionControlsPrompt(): void {
     const text = this.controlsHint;
     if (!text) return;
+    text.setWordWrapWidth(
+      Math.max(PROMPT_MIN_WRAP_WIDTH, this.scale.width - PROMPT_SIDE_PADDING * 2)
+    );
     text.setPosition(this.scale.width / 2, this.scale.height - 36);
     // The squiggle sits on the baseline right after the last letter, like a period.
-    const size = WorldScene.PROMPT_SIZE;
+    const left = text.x - text.width / 2;
     const top = text.y - text.height;
-    this.controlsHintSquiggle?.setPosition(text.x + text.width / 2 + 3, top + size * 1.25 + 3);
+    this.controlsHintSquiggle?.setPosition(
+      left + text.lastLineRight + 3,
+      top + text.lastBaseline + 3
+    );
   }
 
   private startControlsPrompt(): void {
-    if (!this.awaitingFirstControls || !this.controlsHint) return;
+    if (!this.controlsHint) return;
     this.controlsHint.setVisible(true).setAlpha(1);
     this.controlsHintSquiggle?.setFrame(0).setVisible(true);
     if (this.cache.audio.exists(DIALOGUE_SFX_KEY)) {
@@ -1688,6 +1873,13 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
+  // Skip the typewriter and show the whole line at once.
+  private finishControlsPrompt(): void {
+    this.controlsHintTimer?.remove(false);
+    this.controlsHintTyped = this.controlsPromptText.length;
+    this.controlsHint?.setVisibleCount(this.controlsHintTyped);
+  }
+
   private dismissControlsPrompt(): void {
     this.awaitingFirstControls = false;
     this.controlsHintTimer?.remove(false);
@@ -1703,6 +1895,28 @@ export class WorldScene extends Phaser.Scene {
     });
     this.controlsHint = undefined;
     this.controlsHintSquiggle = undefined;
+  }
+
+  private syncTalkPrompt(inReach: boolean): void {
+    if (!inReach) {
+      this.dismissTalkPrompt();
+      return;
+    }
+    if (this.talkPromptShown || this.controlsHint) return;
+    this.talkPromptShown = true;
+    this.talkPromptActive = true;
+    this.controlsPromptText = TOUCH_TALK_PROMPT;
+    this.createControlsHint();
+    // Created after setupUICamera(), so register with the cameras by hand.
+    if (this.controlsHint) this.cameras.main.ignore(this.controlsHint);
+    if (this.controlsHintSquiggle) this.cameras.main.ignore(this.controlsHintSquiggle);
+    this.startControlsPrompt();
+  }
+
+  private dismissTalkPrompt(): void {
+    if (!this.talkPromptActive) return;
+    this.talkPromptActive = false;
+    this.dismissControlsPrompt();
   }
 
   private createControlsOverlay(): void {
@@ -1774,6 +1988,27 @@ export class WorldScene extends Phaser.Scene {
     this.mapImage = image;
     this.mapDot = dot;
 
+    if (this.isTouch) {
+      const label = new HandText(this, MAP_LABEL_MARGIN, MAP_LABEL_MARGIN, MAP_LABEL_TEXT, {
+        size: MAP_LABEL_SIZE,
+        color: '#000000',
+      })
+        .setOrigin(0, 0)
+        .setDepth(20)
+        .setVisible(false);
+      label.postFX?.addGlow(0xffffff, 3, 0, false, 0.1, 10);
+      this.mapLabel = label;
+
+      this.mapCloseText = new HandText(this, cx, cy, MAP_CLOSE_TEXT, {
+        size: MAP_CLOSE_TEXT_SIZE,
+        color: '#ffffff',
+        align: 'center',
+      })
+        .setOrigin(0.5, 0)
+        .setDepth(32)
+        .setVisible(false);
+    }
+
     this.updateMapImageScale();
   }
 
@@ -1783,9 +2018,18 @@ export class WorldScene extends Phaser.Scene {
     // tall/narrow viewport can't stretch it past 80% of that either —
     // whichever ratio is tighter wins, preserving aspect ratio either way.
     const targetWidth = this.scale.width * MAP_OVERLAY_WIDTH_RATIO;
-    const targetHeight = this.scale.height * MAP_OVERLAY_HEIGHT_RATIO;
+    // On touch, a short (landscape) screen also has to fit the close line
+    // under the map, with a gap above and below it.
+    const closeRoom = this.mapCloseText
+      ? this.mapCloseText.height + MAP_CLOSE_TEXT_GAP * 2
+      : 0;
+    const targetHeight = this.scale.height * MAP_OVERLAY_HEIGHT_RATIO - closeRoom;
     const fitScale = Math.min(targetWidth / this.mapImage.width, targetHeight / this.mapImage.height);
     this.mapImage.setScale(fitScale);
+    this.mapCloseText?.setPosition(
+      this.mapImage.x,
+      this.mapImage.y + this.mapImage.displayHeight / 2 + MAP_CLOSE_TEXT_GAP
+    );
   }
 
   private updateMapDot(): void {
@@ -1812,6 +2056,7 @@ export class WorldScene extends Phaser.Scene {
     this.mapOverlayBg?.setVisible(true);
     this.mapImage?.setVisible(true);
     this.mapDot?.setVisible(true);
+    this.mapCloseText?.setVisible(true);
   }
 
   private closeMap(): void {
@@ -1820,6 +2065,7 @@ export class WorldScene extends Phaser.Scene {
     this.mapOverlayBg?.setVisible(false);
     this.mapImage?.setVisible(false);
     this.mapDot?.setVisible(false);
+    this.mapCloseText?.setVisible(false);
   }
 
   // Yes/No choice UI — pure Phaser, no DOM/CSS involved. Game.astro (the DOM
@@ -2024,6 +2270,44 @@ export class WorldScene extends Phaser.Scene {
         })
       );
     }
+  }
+
+  // Which option a screen point is on, or -1. Choice texts live on the UI
+  // camera (zoom 1, no scroll), so screen coordinates are already theirs. Each
+  // row runs from the arrow column to the right edge of the screen, covering
+  // the arrow and the highlight as well as the words.
+  private choiceIndexAt(x: number, y: number): number {
+    const rows = this.choiceTexts.map((t) => ({
+      x: this.choiceColumnX,
+      y: t.y,
+      width: this.scale.width - this.choiceColumnX,
+      height: t.height,
+    }));
+    return indexOfRectAt(x, y, rows, CHOICE_TAP_PADDING_PX);
+  }
+
+  // Finger down on an option: highlight it straight away for feedback.
+  private pressChoice(x: number, y: number): void {
+    const index = this.choiceIndexAt(x, y);
+    this.pressedChoiceIndex = index < 0 ? null : index;
+    if (index < 0 || index === this.selectedChoiceIndex) return;
+    this.selectedChoiceIndex = index;
+    this.repositionChoiceArrow();
+    this.playSelectSfx();
+  }
+
+  // Finger up: confirm only if it is still on the option it went down on, so
+  // sliding away cancels.
+  private releaseChoice(x: number, y: number): void {
+    const pressed = this.pressedChoiceIndex;
+    this.pressedChoiceIndex = null;
+    if (pressed === null || !interactionState.choicesOpen) return;
+    if (this.choiceIndexAt(x, y) !== pressed) return;
+    window.dispatchEvent(
+      new CustomEvent<ChoiceConfirmedDetail>(EVT_CHOICE_CONFIRMED, {
+        detail: { index: pressed },
+      })
+    );
   }
 
   private setupWind(): void {

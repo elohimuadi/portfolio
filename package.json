@@ -8,7 +8,8 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "test": "vitest run"
   },
   "dependencies": {
     "@astrojs/vercel": "^11.0.10",
@@ -17,7 +18,8 @@
     "phaser": "^3.87.0"
   },
   "devDependencies": {
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^5.0.4"
   },
   "overrides": {
     "path-to-regexp": "6.3.0"

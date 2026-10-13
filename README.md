@@ -24,6 +24,16 @@ My portfolio, built as a small top-down pixel-art RPG. Instead of scrolling thro
 | `M`                 | Map                        |
 | `Esc`               | Close menu                 |
 
+On a phone or tablet:
+
+| Touch                           | Action                      |
+| ------------------------------- | --------------------------- |
+| Hold above / below / beside you | Move that way               |
+| Tap someone next to you         | Talk                        |
+| Tap                             | Advance dialogue            |
+| Tap an option                   | Pick it                     |
+| Tap `MAP`                       | Map (tap anywhere to close) |
+
 ## Running locally
 
 **Requirements:** Node.js 22.12.0+.
