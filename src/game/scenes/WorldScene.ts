@@ -68,6 +68,13 @@ const MAP_OVERLAY_WIDTH_RATIO = 0.8;
 const MAP_OVERLAY_HEIGHT_RATIO = 0.8;
 const MAP_DOT_RADIUS = 3;
 const MAP_DOT_COLOR = 0x8a7a94; // desaturated purple
+const MAP_LABEL_TEXT = 'MAP';
+const MAP_LABEL_SIZE = 18;
+const MAP_LABEL_MARGIN = 16; // from the top-left corner of the screen
+const MAP_LABEL_TAP_PADDING_PX = 12;
+const MAP_CLOSE_TEXT = 'tap anywhere to close';
+const MAP_CLOSE_TEXT_SIZE = 16;
+const MAP_CLOSE_TEXT_GAP = 12; // below the map image
 // Negative offset shifts the follow focus below the player, biasing the viewport
 // down so the player sits higher on screen (undoes visible top padding).
 const CAMERA_FOLLOW_OFFSET_Y = -40;
@@ -542,6 +549,9 @@ export class WorldScene extends Phaser.Scene {
   private mapImage?: Phaser.GameObjects.Image;
   private mapDot?: Phaser.GameObjects.Arc;
   private mapOpen = false;
+  // Touch only: the corner label that opens the map, and the line under it.
+  private mapLabel?: HandText;
+  private mapCloseText?: HandText;
   private choiceArrow?: Phaser.GameObjects.Sprite;
   private choiceHighlight?: Phaser.GameObjects.Sprite;
   private choiceHighlightTimer?: Phaser.Time.TimerEvent;
@@ -843,6 +853,7 @@ export class WorldScene extends Phaser.Scene {
     if (!this.player?.body) return;
 
     this.updateDepthSort();
+    this.mapLabel?.setVisible(this.isFreeRoam());
 
     if (!this.introComplete) {
       // Freeze the world during the reveal. Player anim (idle-down) keeps
@@ -931,6 +942,17 @@ export class WorldScene extends Phaser.Scene {
     this.handleInteractKeys(nearest);
   }
 
+  // Walking around with nothing open: the only time the map label shows.
+  private isFreeRoam(): boolean {
+    return (
+      this.introComplete &&
+      !this.awaitingFirstControls &&
+      !this.controlsOpen &&
+      !this.mapOpen &&
+      !interactionState.modalOpen
+    );
+  }
+
   private updateDepthSort(): void {
     // Y-sort: whoever is lower on screen (larger y) renders in front, so the
     // player, NPCs, and props occlude each other correctly as they cross paths.
@@ -984,9 +1006,17 @@ export class WorldScene extends Phaser.Scene {
       this.closeControls();
       return;
     }
-    if (this.mapOpen) return;
+    if (this.mapOpen) {
+      this.closeMap();
+      return;
+    }
     if (interactionState.modalOpen) {
       if (interactionState.choicesOpen) this.handleChoiceTap(pointer.x, pointer.y);
+      return;
+    }
+
+    if (this.isTouchOnMapLabel(pointer)) {
+      this.openMap();
       return;
     }
 
@@ -1431,6 +1461,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.mapOverlayBg) this.cameras.main.ignore(this.mapOverlayBg);
     if (this.mapImage) this.cameras.main.ignore(this.mapImage);
     if (this.mapDot) this.cameras.main.ignore(this.mapDot);
+    if (this.mapLabel) this.cameras.main.ignore(this.mapLabel);
+    if (this.mapCloseText) this.cameras.main.ignore(this.mapCloseText);
     if (this.choiceArrow) this.cameras.main.ignore(this.choiceArrow);
     if (this.choiceHighlight) this.cameras.main.ignore(this.choiceHighlight);
 
@@ -1679,6 +1711,17 @@ export class WorldScene extends Phaser.Scene {
     return isWithinPaddedRect(world.x, world.y, rect, TOUCH_TARGET_PADDING_PX);
   }
 
+  private isTouchOnMapLabel(pointer: Phaser.Input.Pointer): boolean {
+    const label = this.mapLabel;
+    if (!label || !label.visible) return false;
+    return isWithinPaddedRect(
+      pointer.x,
+      pointer.y,
+      { x: label.x, y: label.y, width: label.width, height: label.height },
+      MAP_LABEL_TAP_PADDING_PX
+    );
+  }
+
   // Shared by the keyboard (E/Space) and a tap on the thing itself.
   private interactWith(nearest: Interactable): void {
     this.dismissTalkPrompt();
@@ -1906,6 +1949,27 @@ export class WorldScene extends Phaser.Scene {
     this.mapImage = image;
     this.mapDot = dot;
 
+    if (this.isTouch) {
+      const label = new HandText(this, MAP_LABEL_MARGIN, MAP_LABEL_MARGIN, MAP_LABEL_TEXT, {
+        size: MAP_LABEL_SIZE,
+        color: '#000000',
+      })
+        .setOrigin(0, 0)
+        .setDepth(20)
+        .setVisible(false);
+      label.postFX?.addGlow(0xffffff, 3, 0, false, 0.1, 10);
+      this.mapLabel = label;
+
+      this.mapCloseText = new HandText(this, cx, cy, MAP_CLOSE_TEXT, {
+        size: MAP_CLOSE_TEXT_SIZE,
+        color: '#ffffff',
+        align: 'center',
+      })
+        .setOrigin(0.5, 0)
+        .setDepth(32)
+        .setVisible(false);
+    }
+
     this.updateMapImageScale();
   }
 
@@ -1915,9 +1979,18 @@ export class WorldScene extends Phaser.Scene {
     // tall/narrow viewport can't stretch it past 80% of that either —
     // whichever ratio is tighter wins, preserving aspect ratio either way.
     const targetWidth = this.scale.width * MAP_OVERLAY_WIDTH_RATIO;
-    const targetHeight = this.scale.height * MAP_OVERLAY_HEIGHT_RATIO;
+    // On touch, a short (landscape) screen also has to fit the close line
+    // under the map, with a gap above and below it.
+    const closeRoom = this.mapCloseText
+      ? this.mapCloseText.height + MAP_CLOSE_TEXT_GAP * 2
+      : 0;
+    const targetHeight = this.scale.height * MAP_OVERLAY_HEIGHT_RATIO - closeRoom;
     const fitScale = Math.min(targetWidth / this.mapImage.width, targetHeight / this.mapImage.height);
     this.mapImage.setScale(fitScale);
+    this.mapCloseText?.setPosition(
+      this.mapImage.x,
+      this.mapImage.y + this.mapImage.displayHeight / 2 + MAP_CLOSE_TEXT_GAP
+    );
   }
 
   private updateMapDot(): void {
@@ -1944,6 +2017,7 @@ export class WorldScene extends Phaser.Scene {
     this.mapOverlayBg?.setVisible(true);
     this.mapImage?.setVisible(true);
     this.mapDot?.setVisible(true);
+    this.mapCloseText?.setVisible(true);
   }
 
   private closeMap(): void {
@@ -1952,6 +2026,7 @@ export class WorldScene extends Phaser.Scene {
     this.mapOverlayBg?.setVisible(false);
     this.mapImage?.setVisible(false);
     this.mapDot?.setVisible(false);
+    this.mapCloseText?.setVisible(false);
   }
 
   // Yes/No choice UI — pure Phaser, no DOM/CSS involved. Game.astro (the DOM
