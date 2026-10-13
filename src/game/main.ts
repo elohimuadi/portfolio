@@ -40,5 +40,24 @@ export function startGame(parentId: string): Phaser.Game {
     scene: [FontScene, BootScene, IntroScene, TransitionScene, WorldScene],
   });
 
+  resizeAfterRotation(instance);
+
   return instance;
+}
+
+// Phaser's own orientation handler resizes the game from the parent's old
+// size and then records the new size without acting on it, so after a phone
+// rotates the canvas keeps its previous dimensions. Re-read the parent and
+// resize. If the layout has not caught up yet this is a no-op, and the window
+// resize that follows goes through Phaser's normal (working) path.
+function resizeAfterRotation(game: Phaser.Game): void {
+  const onRotate = (): void => {
+    game.scale.getParentBounds();
+    game.scale.refresh();
+  };
+  if (screen.orientation?.addEventListener) {
+    screen.orientation.addEventListener('change', onRotate);
+  } else {
+    window.addEventListener('orientationchange', onRotate);
+  }
 }
