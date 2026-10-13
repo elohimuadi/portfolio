@@ -84,6 +84,8 @@ const CHOICE_TEXT_START_X = 32; // leaves room for the arrow
 const CHOICE_TEXT_COLOR = '#000000';
 const CHOICE_HIGHLIGHT_PAD_X = 16; // sprig extends this far past the text
 const CHOICE_HIGHLIGHT_PAD_Y = 14;
+// Half the row gap, so neighbouring options' tap areas meet but never overlap.
+const CHOICE_TAP_PADDING_PX = CHOICE_ROW_GAP / 2;
 const KEYBOARD_MOVE_PROMPT = "damn, I'd like to move, maybe i should press c";
 const TOUCH_MOVE_PROMPT = "damn, I'd like to move, maybe i should tap in the direction i wanna go";
 const TOUCH_TALK_PROMPT = 'maybe i should tap on them to talk';
@@ -982,7 +984,11 @@ export class WorldScene extends Phaser.Scene {
       this.closeControls();
       return;
     }
-    if (this.mapOpen || interactionState.modalOpen) return;
+    if (this.mapOpen) return;
+    if (interactionState.modalOpen) {
+      if (interactionState.choicesOpen) this.handleChoiceTap(pointer.x, pointer.y);
+      return;
+    }
 
     const nearest = this.findNearestInteractable();
     if (nearest && this.isTouchOnInteractable(pointer, nearest)) {
@@ -2150,6 +2156,28 @@ export class WorldScene extends Phaser.Scene {
         })
       );
     }
+  }
+
+  // Choice texts live on the UI camera (zoom 1, no scroll), so screen
+  // coordinates are already their coordinates. Origin is top-left.
+  private handleChoiceTap(x: number, y: number): void {
+    const index = this.choiceTexts.findIndex((t) =>
+      isWithinPaddedRect(
+        x,
+        y,
+        { x: t.x, y: t.y, width: t.width, height: t.height },
+        CHOICE_TAP_PADDING_PX
+      )
+    );
+    if (index < 0) return;
+    this.selectedChoiceIndex = index;
+    this.repositionChoiceArrow();
+    this.playSelectSfx();
+    window.dispatchEvent(
+      new CustomEvent<ChoiceConfirmedDetail>(EVT_CHOICE_CONFIRMED, {
+        detail: { index },
+      })
+    );
   }
 
   private setupWind(): void {

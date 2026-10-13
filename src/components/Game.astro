@@ -57,6 +57,11 @@
     display: none;
   }
 
+  /* The choices are drawn on the canvas underneath, so taps must reach it. */
+  .dialogue-layer[data-choosing] {
+    pointer-events: none;
+  }
+
   .dialogue {
     width: min(880px, 100%);
     color: #000000;
@@ -405,6 +410,7 @@
   }
 
   function setState(state: 'typing' | 'ready' | 'choosing' | 'closed'): void {
+    layer.toggleAttribute('data-choosing', state === 'choosing');
     if (state === 'closed') {
       dialogueEl.removeAttribute('data-state');
     } else {
