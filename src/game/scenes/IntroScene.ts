@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { DIALOGUE_SFX_KEY } from './BootScene';
 import { HandText } from '../handtext';
+import { isTouchDevice } from '../device';
 
 const INTRO_LINES = [
   'There lives a boy named Josh that loves lavenders,',
@@ -15,6 +16,8 @@ const BODY_FONT_SIZE = 17;
 const PROMPT_FONT_SIZE = 14;
 const SIDE_PADDING = 24;
 const PROMPT_MARGIN = 12;
+const CONTINUE_PROMPT_MOUSE = '[ click to continue ]';
+const CONTINUE_PROMPT_TOUCH = '[ tap to continue ]';
 const DIALOGUE_SFX_VOLUME = 0.35;
 const DIALOGUE_SFX_MIN_RATE = 0.9;
 const DIALOGUE_SFX_MAX_RATE = 1.1;
@@ -56,10 +59,16 @@ export class IntroScene extends Phaser.Scene {
 
     this.typeSfx = this.sound.add(DIALOGUE_SFX_KEY, { volume: DIALOGUE_SFX_VOLUME });
 
-    this.promptText = new HandText(this, 0, 0, '[ click to continue ]', {
-      size: PROMPT_FONT_SIZE,
-      color: TEXT_COLOR,
-    })
+    this.promptText = new HandText(
+      this,
+      0,
+      0,
+      isTouchDevice() ? CONTINUE_PROMPT_TOUCH : CONTINUE_PROMPT_MOUSE,
+      {
+        size: PROMPT_FONT_SIZE,
+        color: TEXT_COLOR,
+      }
+    )
       .setOrigin(1, 1)
       .setVisible(false);
     this.positionPrompt();
