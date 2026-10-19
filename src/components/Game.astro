@@ -249,6 +249,15 @@
     }
   }
 
+  /* TEMPORARY flicker diagnosis switches; see textDebug in the script. */
+  :global(html[data-text-debug~='still']) .dialogue :global(.hg)::before {
+    animation: none;
+  }
+  :global(html[data-text-debug~='layer']) .dialogue-text,
+  :global(html[data-text-debug~='layer']) .dialogue-title-box {
+    transform: translateZ(0);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .dialogue {
       animation: none;
@@ -334,7 +343,16 @@
   dialogueEl.style.setProperty('--hand-cell', `${HANDFONT.cellHeight}px`);
   dialogueEl.style.setProperty('--hand-baseline', `${HANDFONT.baseline}px`);
   preloadHandFont();
-  startHandGlitches(dialogueEl);
+
+  // TEMPORARY, for diagnosing dialogue text flicker on phones: `?text=still`,
+  // `?text=box`, `?text=layer` (or a comma list) each switch off one suspect
+  // so it can be compared on a real device from the preview deploy.
+  const textDebug = new Set(
+    (new URLSearchParams(window.location.search).get('text') ?? '').split(',').filter(Boolean)
+  );
+  document.documentElement.setAttribute('data-text-debug', [...textDebug].join(' '));
+
+  if (!textDebug.has('still')) startHandGlitches(dialogueEl);
 
   // ---- Hand-drawn boxes + squiggle ------------------------------------
   // Preload every box frame so the boil never shows a half-loaded image.
@@ -367,7 +385,7 @@
     window.setInterval(() => {
       if (layer.hidden) return;
       uiTick += 1;
-      drawBoxes();
+      if (!textDebug.has('box')) drawBoxes();
       if (squiggleMode === 'looping') {
         setSquiggleFrame(SQUIGGLE.growth + (uiTick % SQUIGGLE.complete));
       }
