@@ -26,6 +26,7 @@
   .game-root {
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
     background: #f6f4ee;
     image-rendering: pixelated;
     overflow: hidden;
@@ -36,6 +37,7 @@
     display: block;
     width: 100% !important;
     height: 100% !important;
+    touch-action: none;
   }
 
   /* Full-viewport overlay that captures clicks for "advance dialogue" but
@@ -53,6 +55,11 @@
 
   .dialogue-layer[hidden] {
     display: none;
+  }
+
+  /* The choices are drawn on the canvas underneath, so taps must reach it. */
+  .dialogue-layer[data-choosing] {
+    pointer-events: none;
   }
 
   .dialogue {
@@ -228,6 +235,20 @@
     }
   }
 
+  /* Phones, portrait or landscape: give the garden more of the screen. */
+  @media (max-width: 480px), (max-height: 480px) {
+    .dialogue-layer {
+      padding: 0 8px 8px;
+    }
+    .dialogue-body-box {
+      padding: 8px 4px 8px;
+      min-height: 96px;
+    }
+    .dialogue-text {
+      min-height: 3.8em;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .dialogue {
       animation: none;
@@ -389,6 +410,7 @@
   }
 
   function setState(state: 'typing' | 'ready' | 'choosing' | 'closed'): void {
+    layer.toggleAttribute('data-choosing', state === 'choosing');
     if (state === 'closed') {
       dialogueEl.removeAttribute('data-state');
     } else {
